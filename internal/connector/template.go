@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"agentflow/internal/domain"
 	"agentflow/internal/expr"
 )
 
@@ -137,11 +138,12 @@ func CheckNodeInputs(inputs map[string]string) error {
 }
 
 // NodeInputRefs lists node IDs read by an action node's input templates.
+// It parses with the loop roots (a superset) so `item` does not hide refs.
 func NodeInputRefs(inputs map[string]string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, src := range inputs {
-		parts, err := parseTemplate(src, WorkflowRoots)
+		parts, err := parseTemplate(src, domain.ForEachRoots)
 		if err != nil {
 			continue
 		}
@@ -163,13 +165,17 @@ func NodeInputRefs(inputs map[string]string) []string {
 // EvalNodeInputs renders an action node's inputs against a run environment
 // (trigger, nodes, run).
 func EvalNodeInputs(inputs map[string]string, env map[string]any) (map[string]any, error) {
+	return evalNodeInputs(inputs, WorkflowRoots, env)
+}
+
+func evalNodeInputs(inputs map[string]string, roots map[string]bool, env map[string]any) (map[string]any, error) {
 	out := make(map[string]any, len(inputs))
 	for name, src := range inputs {
 		if !IsTemplate(src) {
 			out[name] = src
 			continue
 		}
-		v, err := RenderTemplate(src, WorkflowRoots, env, nil)
+		v, err := RenderTemplate(src, roots, env, nil)
 		if err != nil {
 			return nil, fmt.Errorf("input %s: %w", name, err)
 		}

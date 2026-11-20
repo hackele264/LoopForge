@@ -11,8 +11,8 @@ function source(name) {
 }
 const context = {};
 vm.createContext(context);
-vm.runInContext("const ACTION_CATEGORY_TEXT={enrichment:'情报富化',response:'响应处置',utility:'通用'};", context);
-for (const name of ['actionCategoryText', 'actionCatalogFind', 'actionOutputRefs', 'actionInputsFromForm', 'actionGatedByApproval', 'actionNodeProblems', 'actionNodeMeta', 'connectionFormBody', 'connectionFormMissing']) vm.runInContext(source(name), context);
+vm.runInContext("const ACTION_CATEGORY_TEXT={enrichment:'情报富化',response:'响应处置',utility:'通用'};const FOR_EACH_BOUNDS={forEachConcurrency:{def:4,max:16},forEachLimit:{def:100,max:1000}};function escapeHTML(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;')}", context);
+for (const name of ['forEachTagText', 'forEachOutputRefs', 'applyForEachField', 'forEachResultsHTML', 'actionCategoryText', 'actionCatalogFind', 'actionOutputRefs', 'actionInputsFromForm', 'actionGatedByApproval', 'actionNodeProblems', 'actionNodeMeta', 'connectionFormBody', 'connectionFormMissing']) vm.runInContext(source(name), context);
 const plain = v => JSON.parse(JSON.stringify(v));
 
 const catalog = [
@@ -55,4 +55,29 @@ const defaults = plain(context.connectionFormBody(def, {name: 'n', secrets: {}, 
 assert.equal(defaults.rateLimitPerSecond, 0);
 assert.equal(defaults.rateLimitBurst, 0);
 assert.equal(defaults.maxRetries, null);
+// List loops.
+const loop = {id: 'vt'};
+context.applyForEachField(loop, 'forEach', 'iocs(trigger, "ipv4")');
+context.applyForEachField(loop, 'forEachConcurrency', '40');
+context.applyForEachField(loop, 'forEachLimit', '');
+context.applyForEachField(loop, 'forEachFailOn', 'all');
+assert.deepEqual(plain(loop), {id: 'vt', forEach: 'iocs(trigger, "ipv4")', forEachConcurrency: 16, forEachFailOn: 'all'});
+assert.equal(context.forEachTagText(loop), '逐项执行 · 并发 16');
+context.applyForEachField(loop, 'forEachFailOn', 'any');
+context.applyForEachField(loop, 'forEachLimit', '0');
+assert.deepEqual(plain(loop), {id: 'vt', forEach: 'iocs(trigger, "ipv4")', forEachConcurrency: 16});
+context.applyForEachField(loop, 'forEach', '  ');
+assert.deepEqual(plain(loop), {id: 'vt'});
+assert.equal(context.forEachTagText({forEach: 'x'}), '逐项执行 · 并发 4');
+assert.deepEqual(plain(context.forEachOutputRefs('vt')), ['nodes.vt.data.total', 'nodes.vt.data.succeeded', 'nodes.vt.data.failed', 'nodes.vt.data.results']);
+const loopMeta = plain(context.actionNodeMeta({...iso, forEach: 'trigger.devices'}, catalog, [{id: 'cn', name: '生产 Falcon'}], wf));
+assert.deepEqual(loopMeta.tags[2], {text: '逐项执行 · 并发 4'});
+assert.equal(context.forEachResultsHTML({verdict: 'x'}), '');
+const table = context.forEachResultsHTML({total: 2, succeeded: 1, failed: 1, truncated: 'bodies', results: [
+  {index: 0, item: '10.0.0.1', ok: true, output: {status: 200, malicious: 3, body: null, bodyTruncated: true}},
+  {index: 1, item: '<b>', ok: false, error: 'HTTP 404'}]});
+assert.match(table, /共 2 项 · 成功 1 · 失败 1 · 响应原文已省略/);
+assert.match(table, /status=200 · malicious=3<\/td>/);
+assert.match(table, /<tr class="is-failed"><td>2<\/td><td><code>&lt;b&gt;<\/code><\/td><td>失败<\/td><td>HTTP 404<\/td>/);
+assert.equal(context.forEachResultsHTML({total: 0, succeeded: 0, failed: 0, results: []}).includes('<table'), false);
 console.log('flow actions ok');

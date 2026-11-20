@@ -177,6 +177,13 @@ fields, for example `nodes.vt.data.malicious`, plus the parsed response
 `body`, whether or not output fields are declared. An output larger than
 128 KiB drops the body and sets `bodyTruncated`.
 
+To run an action once per element of a list, for example one lookup per
+extracted IP, set the node's `forEach` to a list expression such as
+`iocs(trigger, "ipv4")` and read the element as `{{ item }}` in the inputs.
+The node's output is then `{total, succeeded, failed, results}`; see
+[list loops](conditional-workflows.md#list-loops) for concurrency, limits
+and failure handling.
+
 ## Case audit
 
 When the run belongs to a case, every external action, successful or not,
@@ -282,5 +289,3 @@ seals them ([deployment](deployment.md#credential-encryption)).
   `maxAttempts` decides whether the whole action runs again.
 - Read-only connector actions are not offered to Agents as MCP tools; an
   Agent can use a vendor's own MCP server instead.
-- No loop over a list (for example one lookup per extracted IP); look up the
-  first value, or run a script node.

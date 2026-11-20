@@ -93,6 +93,12 @@ type WorkflowNode struct {
 	// Action configures an action node: a connector action the platform runs
 	// itself, outside any sandbox. See internal/connector.
 	Action *NodeAction `json:"action,omitempty"`
+	// ForEach, on action nodes, runs the action once per element of the list
+	// this expression yields. See workflow_foreach.go.
+	ForEach            string `json:"forEach,omitempty"`
+	ForEachConcurrency int    `json:"forEachConcurrency,omitempty"`
+	ForEachLimit       int    `json:"forEachLimit,omitempty"`
+	ForEachFailOn      string `json:"forEachFailOn,omitempty"` // any (default), all
 }
 
 // NodeAction names the connector action an action node runs and how its

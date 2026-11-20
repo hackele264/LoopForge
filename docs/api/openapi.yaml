@@ -6395,7 +6395,7 @@ components:
           type: object
           additionalProperties:
             type: string
-          description: 'Templates; "{{ expr }}" parts read trigger, nodes and run like runIf.'
+          description: 'Templates; "{{ expr }}" parts read trigger, nodes and run like runIf, plus item and index on a node with forEach.'
     CaseTrigger:
       type: object
       required: [projectId, workflowId, name, events]
@@ -6690,6 +6690,23 @@ components:
           enum: [agent, script, command, approval, sop, action]
         action:
           $ref: "#/components/schemas/NodeAction"
+        forEach:
+          type: string
+          description: 'Action nodes only. Expression over trigger, nodes and run that yields a list; the action runs once per element, read as item (and index) in its input templates. Output becomes {total, succeeded, failed, results[{index, item, ok, output|error}]}.'
+        forEachConcurrency:
+          type: integer
+          minimum: 0
+          maximum: 16
+          description: Items run at once; 0 or omitted means 4. Needs forEach.
+        forEachLimit:
+          type: integer
+          minimum: 0
+          maximum: 1000
+          description: Most items allowed; a longer list fails the node before any call. 0 or omitted means 100. Needs forEach.
+        forEachFailOn:
+          type: string
+          enum: [any, all]
+          description: 'any (default): the node fails when any item fails; all: only when every item fails. Needs forEach.'
         agentId:
           type: string
         executorId:
