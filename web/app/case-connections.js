@@ -8,6 +8,9 @@ function connectionFormBody(def,form,existing){
   if(!existing){body.projectId=form.projectId;body.connectorId=def.id}
   for(const p of def.params||[])body.params[p.name]=String((form.params||{})[p.name]||'').trim();
   for(const s of def.secrets||[]){const v=String((form.secrets||{})[s.name]||'').trim();if(v)body.secrets[s.name]=v}
+  // TLS fields are sent whenever the form has them: an empty value clears.
+  if(form.tlsCertSha256!==undefined)body.tlsCertSha256=String(form.tlsCertSha256||'').trim();
+  if(form.tlsCaPem!==undefined)body.tlsCaPem=String(form.tlsCaPem||'').trim();
   return body;
 }
 // Required fields the form leaves empty (a stored secret counts as set).
@@ -55,6 +58,11 @@ function connectionFormHTML(existing){
     ${field('name','名称 *',existing?.name||def.title,'maxlength="120"')}
     ${field('baseUrl','服务地址',existing?.baseUrl||'',`placeholder="${escapeHTML(def.baseUrl?'默认 '+def.baseUrl:'https://')}"`)}
     ${params}${secrets}
+    <details class="conn-tls" ${existing?.tlsCertSha256||existing?.tlsCaPem?'open':''}><summary>HTTPS 证书（服务用自签证书时填写）</summary>
+      ${field('tlsCertSha256','证书 SHA-256 指纹',existing?.tlsCertSha256||'','placeholder="openssl x509 -fingerprint -sha256 输出的值，冒号可保留" spellcheck="false"')}
+      <label class="field"><span>CA 证书（PEM，可选）</span><textarea class="input" name="tlsCaPem" rows="3" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----">${escapeHTML(existing?.tlsCaPem||'')}</textarea></label>
+      <p class="prop-hint">只填指纹时只认这一张证书、不校验签发链；填了 CA 时按 CA 校验，再核对指纹。</p>
+    </details>
     <p class="case-form-error" role="alert"></p>
     <div class="conn-form-actions"><button type="submit" class="button primary small">${existing?'保存':'创建连接'}</button><button type="button" class="button ghost small" data-conn-cancel>取消</button></div></form>`;
 }
@@ -77,7 +85,7 @@ function bindConnections(host){
       e.preventDefault();
       const existing=connState.editing==='new'?null:connState.list.find(c=>c.id===connState.editing);
       const def=connectionDef(existing?existing.connectorId:connState.connector);if(!def)return;
-      const values={projectId:project,name:form.elements.name.value,baseUrl:form.elements.baseUrl.value,params:{},secrets:{}};
+      const values={projectId:project,name:form.elements.name.value,baseUrl:form.elements.baseUrl.value,params:{},secrets:{},tlsCertSha256:form.elements.tlsCertSha256.value,tlsCaPem:form.elements.tlsCaPem.value};
       [...form.elements].forEach(el=>{const [kind,name]=String(el.name||'').split(':');if(kind==='param')values.params[name]=el.value;if(kind==='secret')values.secrets[name]=el.value});
       const err=form.querySelector('.case-form-error');
       const missing=connectionFormMissing(def,values,existing);

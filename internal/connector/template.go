@@ -177,3 +177,34 @@ func EvalNodeInputs(inputs map[string]string, env map[string]any) (map[string]an
 	}
 	return out, nil
 }
+
+// SourceRoots are the names an alert source's input templates may read.
+var SourceRoots = map[string]bool{"window": true}
+
+// CheckSourceInputs compiles an alert source's input templates.
+func CheckSourceInputs(inputs map[string]string) error {
+	for name, src := range inputs {
+		if err := checkTemplate(src, SourceRoots); err != nil {
+			return fmt.Errorf("input %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// EvalSourceInputs renders an alert source's inputs for one window.
+func EvalSourceInputs(inputs map[string]string, window map[string]any) (map[string]any, error) {
+	env := map[string]any{"window": window}
+	out := make(map[string]any, len(inputs))
+	for name, src := range inputs {
+		if !IsTemplate(src) {
+			out[name] = src
+			continue
+		}
+		v, err := RenderTemplate(src, SourceRoots, env, nil)
+		if err != nil {
+			return nil, fmt.Errorf("input %s: %w", name, err)
+		}
+		out[name] = v
+	}
+	return out, nil
+}

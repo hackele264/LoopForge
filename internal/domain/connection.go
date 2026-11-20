@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/pem"
 	"fmt"
 	"strings"
 	"time"
@@ -18,11 +19,17 @@ type Connection struct {
 	// products, regional clouds). Empty uses the connector default.
 	BaseURL string `json:"baseUrl,omitempty"`
 	// Params are the connector's non-secret settings (tenant ID, region).
-	Params     map[string]string `json:"params,omitempty"`
-	SecretsSet []string          `json:"secretsSet,omitempty"`
-	CreatedBy  int64             `json:"createdBy,omitempty"`
-	CreatedAt  time.Time         `json:"createdAt"`
-	UpdatedAt  time.Time         `json:"updatedAt"`
+	Params map[string]string `json:"params,omitempty"`
+	// TLSCertSHA256 pins the server certificate by the SHA-256 of its DER
+	// bytes, for on-premise products with self-signed certificates (a
+	// Splunk management port). CA checks are skipped unless TLSCAPEM is set.
+	TLSCertSHA256 string `json:"tlsCertSha256,omitempty"`
+	// TLSCAPEM is a PEM bundle of CAs trusted for this connection only.
+	TLSCAPEM   string    `json:"tlsCaPem,omitempty"`
+	SecretsSet []string  `json:"secretsSet,omitempty"`
+	CreatedBy  int64     `json:"createdBy,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 	// Secrets is never serialized; only the repository and the action
 	// executor read it.
 	Secrets map[string]string `json:"-"`
@@ -43,5 +50,37 @@ func (c Connection) ValidateConnectionBase() error {
 	if b := strings.TrimSpace(c.BaseURL); b != "" && !strings.HasPrefix(b, "https://") && !strings.HasPrefix(b, "http://") {
 		return fmt.Errorf("baseUrl must start with https:// or http://")
 	}
+	if c.TLSCertSHA256 != "" && !validCertPin(c.TLSCertSHA256) {
+		return fmt.Errorf("tlsCertSha256 must be 64 hex characters")
+	}
+	if c.TLSCAPEM != "" {
+		if len(c.TLSCAPEM) > 64<<10 {
+			return fmt.Errorf("tlsCaPem is too long")
+		}
+		if block, _ := pem.Decode([]byte(c.TLSCAPEM)); block == nil || block.Type != "CERTIFICATE" {
+			return fmt.Errorf("tlsCaPem must hold PEM certificates")
+		}
+	}
+	if (c.TLSCertSHA256 != "" || c.TLSCAPEM != "") && strings.HasPrefix(strings.TrimSpace(c.BaseURL), "http://") {
+		return fmt.Errorf("TLS settings need an https:// baseUrl")
+	}
 	return nil
+}
+
+// NormalizeCertPin lowercases a certificate fingerprint and drops the
+// colons and spaces tools such as openssl print.
+func NormalizeCertPin(pin string) string {
+	return strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(strings.TrimSpace(pin)))
+}
+
+func validCertPin(pin string) bool {
+	if len(pin) != 64 {
+		return false
+	}
+	for _, r := range pin {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return true
 }

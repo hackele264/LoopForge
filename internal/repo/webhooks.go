@@ -2,7 +2,6 @@ package repo
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"agentflow/internal/domain"
@@ -203,7 +202,9 @@ func (r *WebhooksRepo) PurgeExpiredWebhookFingerprints(now time.Time) (int64, er
 // deliveries that reached the workflow.
 func (r *WebhooksRepo) RecordWebhookDelivery(d domain.WebhookDelivery) error {
 	if d.ID == "" {
-		d.ID = fmt.Sprintf("whd-%d", d.ReceivedAt.UnixNano())
+		// A random suffix: a pulled batch records many deliveries within one
+		// clock tick (microseconds on macOS).
+		d.ID = newRowID("whd")
 	}
 	payload, err := json.Marshal(d)
 	if err != nil {

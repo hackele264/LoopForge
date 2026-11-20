@@ -39,7 +39,8 @@ Actions come in three categories:
 | 微步在线 ThreatBook | IP 信誉 | `apikey` query parameter |
 | Microsoft Defender for Endpoint | 查找终端, 终端详情, **隔离**, **解除隔离** | OAuth 2.0 client credentials |
 | Microsoft Entra ID | 查询用户, **禁用账号**, **启用账号**, **吊销会话** | OAuth 2.0 client credentials |
-| CrowdStrike Falcon | 查找终端, **网络隔离**, **解除隔离** | OAuth 2.0 client credentials |
+| CrowdStrike Falcon | 查找终端, 查询告警 ID, 获取告警详情, **网络隔离**, **解除隔离** | OAuth 2.0 client credentials |
+| Splunk | 搜索（oneshot） | Bearer token |
 | 企业微信群机器人 | 发送文本 / Markdown | `key` query parameter |
 | 钉钉群机器人 | 发送 Markdown | `access_token` query parameter |
 
@@ -56,6 +57,13 @@ A connection belongs to one project and one connector. It holds:
 - **参数**: non-secret settings such as the Entra tenant ID.
 - **凭据**: write-only. The API returns only the names of the secrets that
   are set; an empty field on edit keeps the stored value.
+- **HTTPS 证书**: for on-premise products with a self-signed certificate (a
+  Splunk management port). `tlsCertSha256` pins the server certificate by the
+  SHA-256 of its DER bytes; colons and case from
+  `openssl x509 -noout -fingerprint -sha256` are accepted. With only a pin
+  the CA chain is not checked: the pin is the trust decision. `tlsCaPem`
+  trusts a PEM CA bundle for this connection only; with both set the chain is
+  checked first, then the pin. Both need an `https://` address.
 
 Project members of any role may list connections; owners, maintainers and
 members may create, edit, test and delete them. 测试 runs the connector's
@@ -179,6 +187,9 @@ Templates may read `inputs` and `params`; output and `failIf` expressions
 read `response` (`status`, `headers`, `body`) and `inputs`. OAuth token
 URLs may be absolute or relative to the connection's address; tokens are
 cached per connection until a minute before they expire.
+
+Read-only actions can also feed alerts in on a schedule, for products that
+cannot push to a webhook: see [pull alert sources](alert-sources.md).
 
 ## Storage
 

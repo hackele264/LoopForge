@@ -55,6 +55,10 @@ type connectionInput struct {
 	Params       map[string]string `json:"params"`
 	Secrets      map[string]string `json:"secrets"`
 	ClearSecrets []string          `json:"clearSecrets"`
+	// TLSCertSHA256 and TLSCAPEM replace the stored values when present;
+	// an empty string clears them.
+	TLSCertSHA256 *string `json:"tlsCertSha256"`
+	TLSCAPEM      *string `json:"tlsCaPem"`
 }
 
 func newConnectionID() (string, error) {
@@ -124,6 +128,12 @@ func applyConnectionInput(conn *domain.Connection, def *connector.Connector, req
 	}
 	if req.BaseURL != nil {
 		conn.BaseURL = strings.TrimRight(strings.TrimSpace(*req.BaseURL), "/")
+	}
+	if req.TLSCertSHA256 != nil {
+		conn.TLSCertSHA256 = domain.NormalizeCertPin(*req.TLSCertSHA256)
+	}
+	if req.TLSCAPEM != nil {
+		conn.TLSCAPEM = strings.TrimSpace(*req.TLSCAPEM)
 	}
 	if req.Params != nil {
 		params := map[string]string{}

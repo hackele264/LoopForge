@@ -75,6 +75,7 @@ type Background struct {
 	recoveryGate   <-chan struct{}
 	scheduler      *schedule.Service
 	runnerControls *runnerControlHub
+	alertSources   *alertSourcesHandlers
 	handedOver     atomic.Bool
 	stopOnce       sync.Once
 	claimOnce      sync.Once

@@ -63,10 +63,17 @@ hop instead; it is honoured only when the connection comes from a loopback
 address, so only enable it when the proxy runs on the same host and
 overwrites that header.
 
+## Pulling instead of pushing
+
+Products that cannot call a webhook (Splunk, CrowdStrike Falcon) can be
+polled on a schedule; what a poll returns goes through the webhook exactly
+like a pushed alert. See [pull alert sources](alert-sources.md).
+
 ## Troubleshooting
 
 调用记录 (or `GET /api/webhooks/{id}/deliveries`) lists the 50 most recent
-calls with their outcome, HTTP status, run, fingerprint and source address.
+calls with their outcome, HTTP status, run, fingerprint and source address;
+alerts a pull source admitted show the source (`sourceId`) instead.
 Calls with an unknown ID or wrong secret are not logged against any webhook.
 The last 200 deliveries per webhook are kept.
 

@@ -45,4 +45,6 @@ assert.deepEqual(plain(context.connectionFormMissing(def, {name: 'x', secrets: {
 assert.deepEqual(plain(context.connectionFormBody(def, {projectId: 'p', name: ' Falcon ', baseUrl: '', secrets: {client_id: ' i ', client_secret: ''}}, null)),
   {name: 'Falcon', baseUrl: '', params: {}, secrets: {client_id: 'i'}, projectId: 'p', connectorId: 'crowdstrike'});
 assert.equal(plain(context.connectionFormBody(def, {name: 'n', secrets: {}}, {id: 'cn'})).projectId, undefined);
+assert.deepEqual(plain(context.connectionFormBody(def, {name: 'n', secrets: {}, tlsCertSha256: ' AB:CD ', tlsCaPem: ''}, {id: 'cn'})),
+  {name: 'n', baseUrl: '', params: {}, secrets: {}, tlsCertSha256: 'AB:CD', tlsCaPem: ''});
 console.log('flow actions ok');

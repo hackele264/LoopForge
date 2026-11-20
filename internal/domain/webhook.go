@@ -75,6 +75,9 @@ type WebhookDelivery struct {
 	Fingerprint string    `json:"fingerprint,omitempty"`
 	Message     string    `json:"message,omitempty"`
 	SourceIP    string    `json:"sourceIp,omitempty"`
+	// SourceID names the alert source that pulled the alert; empty for a
+	// pushed delivery.
+	SourceID string `json:"sourceId,omitempty"`
 }
 
 // Webhook case modes.

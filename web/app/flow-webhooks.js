@@ -24,6 +24,15 @@ function webhookCurlExample(url){
 function webhookDeliveryLabel(d){
   return ({started:'已启动运行',deduplicated:'重复告警，已合并',rejected:'已拒绝',failed:'启动失败'})[d?.status]||d?.status||'';
 }
+// Where a delivery came from: the pulling source's name, or the caller.
+function webhookDeliveryOrigin(d,sources){
+  if(d?.sourceId){
+    const all=sources||Object.values((typeof alertSourceState==='object'&&alertSourceState.byWebhook)||{}).flat();
+    const src=all.find(s=>s.id===d.sourceId);
+    return `拉取：${src?src.name:d.sourceId}${d.message?' · '+d.message:''}`;
+  }
+  return d?.message||d?.sourceIp||'';
+}
 function webhookWindowText(seconds){
   const s=Number(seconds)||0;if(!s)return '';
   return s%3600===0?`${s/3600} 小时`:s%60===0?`${s/60} 分钟`:`${s} 秒`;
@@ -45,6 +54,7 @@ async function loadWorkflowWebhooks(force){
   webhookState.loadedFor=key;webhookState.error='';
   try{webhookState.list=await api(`/api/webhooks?projectId=${encodeURIComponent(wf.projectId)}&workflowId=${encodeURIComponent(wf.id)}`,{silent:true})}
   catch(e){webhookState.list=[];webhookState.error=e.message}
+  if(typeof loadAlertSources==='function')await loadAlertSources(wf.projectId,force);
   renderWorkflowWebhooks();
 }
 
@@ -92,12 +102,12 @@ function webhookCardHTML(w){
     w.signatureHeader?`签名：${w.signatureHeader}`:'',
     w.lastTriggeredAt?`最近触发 ${new Date(w.lastTriggeredAt).toLocaleString()}`:'尚未触发',
   ].filter(Boolean);
-  const deliveries=dl?`<div class="webhook-deliveries">${dl.length?dl.slice(0,20).map(d=>`<div class="webhook-delivery ${escapeHTML(d.status)}"><span>${escapeHTML(new Date(d.receivedAt).toLocaleString())}</span><b>${escapeHTML(webhookDeliveryLabel(d))}</b><span>${d.httpStatus||''}</span>${d.runId?`<button type="button" class="link" data-open-run="${escapeHTML(d.runId)}">${escapeHTML(d.runId.slice(-10))}</button>`:'<span></span>'}<small>${escapeHTML(d.message||d.sourceIp||'')}</small></div>`).join(''):'<p class="prop-hint">还没有收到调用</p>'}</div>`:'';
+  const deliveries=dl?`<div class="webhook-deliveries">${dl.length?dl.slice(0,20).map(d=>`<div class="webhook-delivery ${escapeHTML(d.status)}"><span>${escapeHTML(new Date(d.receivedAt).toLocaleString())}</span><b>${escapeHTML(webhookDeliveryLabel(d))}</b><span>${d.httpStatus||''}</span>${d.runId?`<button type="button" class="link" data-open-run="${escapeHTML(d.runId)}">${escapeHTML(d.runId.slice(-10))}</button>`:'<span></span>'}<small>${escapeHTML(webhookDeliveryOrigin(d))}</small></div>`).join(''):'<p class="prop-hint">还没有收到调用</p>'}</div>`:'';
   return `<div class="webhook-card${w.enabled?'':' off'}" data-webhook="${escapeHTML(w.id)}">
     <div class="webhook-card-head"><b>${escapeHTML(w.name)}</b><span class="webhook-pill">${w.enabled?'已启用':'已停用'}</span><code title="地址末段是密钥，完整地址只在创建或轮换时显示">/api/hooks/${escapeHTML(w.id)}/${escapeHTML(w.secretPrefix||'')}…</code></div>
     <p class="webhook-facts">${facts.map(escapeHTML).join(' · ')}</p>
     <div class="webhook-actions"><button type="button" class="button ghost small" data-webhook-edit>${editing?'收起':'配置'}</button><button type="button" class="button ghost small" data-webhook-deliveries>${dl?'隐藏记录':'调用记录'}</button><button type="button" class="button ghost small" data-webhook-rotate>轮换密钥</button><button type="button" class="button ghost small danger" data-webhook-delete>删除</button></div>
-    ${editing?webhookFormHTML(w):''}${deliveries}
+    ${editing?webhookFormHTML(w):''}${deliveries}${typeof alertSourcesHTML==='function'?alertSourcesHTML(w):''}
   </div>`;
 }
 
@@ -139,10 +149,16 @@ function bindWorkflowWebhooks(host){
   });
   host.querySelectorAll('[data-webhook]').forEach(card=>{
     const id=card.dataset.webhook;
+    const w=(webhookState.list||[]).find(x=>x.id===id);
+    if(w&&typeof bindAlertSources==='function')bindAlertSources(card,w);
     card.querySelector('[data-webhook-edit]').onclick=()=>{webhookState.editing=webhookState.editing===id?'':id;renderWorkflowWebhooks()};
     card.querySelector('[data-webhook-deliveries]').onclick=async()=>{
       if(webhookState.deliveries[id]){delete webhookState.deliveries[id];renderWorkflowWebhooks();return}
-      try{webhookState.deliveries[id]=await api(`/api/webhooks/${encodeURIComponent(id)}/deliveries`,{silent:true});renderWorkflowWebhooks()}catch(e){toast(e.message)}
+      try{
+        webhookState.deliveries[id]=await api(`/api/webhooks/${encodeURIComponent(id)}/deliveries`,{silent:true});
+        if(typeof loadAlertSources==='function')await loadAlertSources(state.workflow.projectId,true);
+        renderWorkflowWebhooks();
+      }catch(e){toast(e.message)}
     };
     card.querySelector('[data-webhook-rotate]').onclick=async()=>{
       if(!await afConfirm({title:'轮换 Webhook 密钥',message:'旧地址会立即失效，调用方需要换成新地址。继续吗？',confirmText:'轮换'}))return;
