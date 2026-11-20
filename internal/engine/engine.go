@@ -23,7 +23,7 @@ type Engine struct {
 	sandboxes          *runtime.Manager
 	runner             *runtime.ExecutorRunner
 	mu                 sync.Mutex
-	stateMu            sync.Mutex
+	stateMu            timedMutex
 	running            map[string]context.CancelFunc
 	runEnvMu           sync.Mutex
 	runEnvs            map[string]*runEnvironment
