@@ -752,6 +752,7 @@ func allModels() []any {
 	return []any{domain.BotUserBinding{}, domain.BotBindingChallenge{}, domain.BotConnection{}, domain.BotConversation{}, domain.BotInteraction{}, notificationBotRow{}, botCredentialRow{}, domain.NotificationDelivery{},
 		userRow{}, localAccountRow{}, userConfigRow{}, gitSSHKeyRow{}, gitHTTPCredentialRow{}, authIntegrationRow{}, platformCodeBuddyKeyRow{}, apiTokenRow{}, genericTemplateRow{},
 		insightSourceRow{}, insightExecutionRow{},
+		webhookRow{}, webhookDedupRow{}, webhookDeliveryRow{},
 		projectRow{}, projectMemberRow{}, repositoryRow{}, businessDomainRow{}, businessDomainAssignmentRow{},
 		agentRow{}, ruleRow{}, skillRow{}, skillFileRow{}, mcpServerRow{}, mcpFileRow{}, executorRow{},
 		dockerfileRow{}, environmentRow{}, sandboxRow{},

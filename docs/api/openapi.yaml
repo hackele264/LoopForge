@@ -2098,6 +2098,210 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/webhooks:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhooks
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: workflowId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Webhooks, newest first; secrets are never included
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Webhook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Webhooks]
+      operationId: createWebhook
+      description: Creates a webhook that starts workflowId when called. Its runs execute as the signed-in creator. The URL secret is returned only in this response and on rotation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookInput"
+      responses:
+        "201":
+          $ref: "#/components/responses/WebhookSecret"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a project writer, or no signed-in user
+  /api/webhooks/{webhookId}:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Webhooks]
+      operationId: getWebhook
+      responses:
+        "200":
+          description: Webhook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Webhooks]
+      operationId: updateWebhook
+      description: Replaces the editable configuration. id, projectId and the URL secret cannot change. An empty signingSecret keeps the stored one; an empty signatureHeader turns signature checks off.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookInput"
+      responses:
+        "200":
+          description: Updated webhook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Webhooks]
+      operationId: deleteWebhook
+      description: Deletes the webhook with its fingerprints and delivery log; its URL stops working.
+      responses:
+        "200":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/webhooks/{webhookId}/rotate:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Webhooks]
+      operationId: rotateWebhookSecret
+      description: Issues a new URL secret; the old URL stops working at once.
+      responses:
+        "200":
+          $ref: "#/components/responses/WebhookSecret"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/webhooks/{webhookId}/deliveries:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookDeliveries
+      responses:
+        "200":
+          description: The 50 most recent deliveries, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WebhookDelivery"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/hooks/{webhookId}/{secret}:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: secret
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Webhooks]
+      operationId: ingestWebhook
+      security: []
+      description: >-
+        Inbound alert. Authenticated by the URL secret, not a user session; an
+        unknown ID or wrong secret both answer 401. The JSON body (up to 1 MiB)
+        becomes the run's trigger payload; a body that is not an object is
+        wrapped as {"body": value}. GET takes query parameters instead and PUT
+        behaves like POST, when the webhook allows those methods. With
+        dedupFields set, an alert whose fingerprint was seen within
+        dedupWindowSeconds answers 200 deduplicated and starts nothing.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "202":
+          description: Run started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [started]
+                  runId:
+                    type: string
+        "200":
+          description: Duplicate alert; no run started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [deduplicated]
+                  runId:
+                    type: string
+                  hits:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Unknown webhook, wrong secret or invalid signature
+        "403":
+          description: Source address not allowed
+        "405":
+          description: Method not allowed
+        "409":
+          description: Webhook disabled
+        "413":
+          description: Body too large
+        "503":
+          description: The run could not start
   /api/workflow-conditions/check:
     post:
       tags: [Workflows]
@@ -3895,6 +4099,21 @@ components:
           schema:
             $ref: "#/components/schemas/ScheduleJob"
   responses:
+    WebhookSecret:
+      description: Webhook with its URL secret, shown only now
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [webhook, secret, path]
+            properties:
+              webhook:
+                $ref: "#/components/schemas/Webhook"
+              secret:
+                type: string
+              path:
+                type: string
+                description: Ingress path, /api/hooks/{id}/{secret}; prefix it with the instance URL.
     BadRequest:
       description: Invalid request
       content:
@@ -4948,6 +5167,96 @@ components:
         waitingPolicy: {type: string, enum: [actionable, event], description: Waiting reminders cancel if resolved before sending by default; event records are sent even after resolution.}
         contentMode: {type: string, enum: [template, ai]}
         aiInstruction: {type: string, maxLength: 4000, description: Writing instructions for the independent SOP report or the existing scheduled task model call}
+    WebhookInput:
+      type: object
+      required: [projectId, workflowId, name]
+      properties:
+        projectId:
+          type: string
+        workflowId:
+          type: string
+        name:
+          type: string
+          maxLength: 120
+        enabled:
+          type: boolean
+        methods:
+          type: array
+          items:
+            type: string
+            enum: [POST, PUT, GET]
+          description: Accepted methods; empty means POST only.
+        allowedCidrs:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+          description: Source addresses or CIDR ranges; empty allows any caller.
+        signatureHeader:
+          type: string
+          description: Header carrying HMAC-SHA256 of the raw body as hex, optionally prefixed with sha256=.
+        signingSecret:
+          type: string
+          description: HMAC key. Write-only; empty on update keeps the stored key.
+        titleField:
+          type: string
+          description: Dot path into the payload used as the run input, for example alert.title.
+        dedupFields:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+          description: Dot paths forming the alert fingerprint; empty disables deduplication.
+        dedupWindowSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+          description: Dedup window; defaults to 3600 when dedupFields is set.
+    Webhook:
+      allOf:
+        - $ref: "#/components/schemas/WebhookInput"
+        - type: object
+          properties:
+            id:
+              type: string
+            secretPrefix:
+              type: string
+            hasSigningSecret:
+              type: boolean
+            createdBy:
+              type: integer
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+            lastTriggeredAt:
+              type: string
+              format: date-time
+    WebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+        webhookId:
+          type: string
+        receivedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [started, deduplicated, rejected, failed]
+        httpStatus:
+          type: integer
+        runId:
+          type: string
+        fingerprint:
+          type: string
+        message:
+          type: string
+        sourceIp:
+          type: string
     WorkflowNode:
       type: object
       required: [id, name, type]

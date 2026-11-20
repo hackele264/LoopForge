@@ -67,6 +67,10 @@ func protectedAccessPath(path string) bool {
 	if path == insightIngestPath {
 		return false
 	}
+	// Webhook ingress authenticates with the secret in its own URL.
+	if strings.HasPrefix(path, webhookIngressPrefix) {
+		return false
+	}
 	if path == "/mcp" {
 		return true
 	}

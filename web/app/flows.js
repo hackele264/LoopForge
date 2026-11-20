@@ -164,6 +164,7 @@ function renderWorkflowMeta(){
   const pill=$('#flowSettingsPill');if(pill)pill.textContent=catalogGeneric(wf)?(isPlatformAdmin()?'通用模板 · 可编辑':'通用模板'):`${wf.status==='published'?'已发布':'草稿'} · v${wf.version} · ${wf.nodes.length} 步`;
   renderFlowHeader();
   if(typeof flowPalette!=='undefined')flowPalette.render();
+  if(typeof loadWorkflowWebhooks==='function')loadWorkflowWebhooks();
 }
 async function switchFlowWorkflow(id){
   if(!id||id===state.workflow?.id)return false;

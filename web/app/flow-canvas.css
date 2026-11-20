@@ -501,3 +501,31 @@ html[data-theme="dark"] #aiOrchestrator :is([data-cli="codex"],[data-cli="claude
 #flowView .fd-try-result{font-size:12px;color:var(--fd-ink-3)}
 #flowView .fd-try-result.good{color:rgb(var(--fd-ok))}
 #flowView .fd-try-result.bad{color:rgb(var(--fd-rj))}
+
+/* webhook triggers in the flow settings drawer */
+#flowView .webhook-card{border:1px solid var(--fd-line);border-radius:10px;padding:10px 12px;margin:0 0 10px;background:var(--fd-surface)}
+#flowView .webhook-card.off{opacity:.7}
+#flowView .webhook-card-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#flowView .webhook-card-head code{margin-left:auto;font-size:11.5px;color:var(--fd-ink-3)}
+#flowView .webhook-pill{font-size:11px;padding:1px 7px;border-radius:5px;background:var(--fd-soft);color:var(--fd-ink-3)}
+#flowView .webhook-card:not(.off) .webhook-pill{background:rgb(var(--fd-ok) / .12);color:rgb(var(--fd-ok))}
+#flowView .webhook-facts{margin:6px 0 8px;font-size:12px;color:var(--fd-ink-3)}
+#flowView .webhook-actions{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+#flowView .webhook-actions .danger{color:rgb(var(--fd-rj))}
+#flowView .webhook-form{display:grid;gap:10px;margin:10px 0;padding:10px 0;border-top:1px dashed var(--fd-line)}
+#flowView .webhook-form .field{display:grid;gap:4px;font-size:12px;color:var(--fd-ink-3)}
+#flowView .webhook-form .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+#flowView .webhook-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#flowView .webhook-row .webhook-narrow{max-width:160px}
+#flowView .webhook-methods{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--fd-ink-3)}
+#flowView .webhook-form-error{min-height:0;margin:0;color:rgb(var(--fd-rj));font-size:12px}
+#flowView .webhook-reveal{border:1px solid rgb(var(--fd-warn) / .5);background:rgb(var(--fd-warn) / .08);border-radius:10px;padding:10px 12px;margin:0 0 10px;display:grid;gap:8px;font-size:12.5px}
+#flowView .webhook-url{display:flex;gap:8px;align-items:center}
+#flowView .webhook-url code{flex:1;min-width:0;overflow-wrap:anywhere;font-size:11.5px}
+#flowView .webhook-reveal pre{white-space:pre-wrap;font-size:11.5px;margin:6px 0 0}
+#flowView .webhook-deliveries{display:grid;gap:4px;margin-top:8px;max-height:260px;overflow:auto}
+#flowView .webhook-delivery{display:grid;grid-template-columns:150px 110px 36px 90px 1fr;gap:6px;align-items:center;font-size:11.5px;color:var(--fd-ink-3)}
+#flowView .webhook-delivery b{font-weight:600;color:var(--fd-ink-2)}
+#flowView .webhook-delivery.started b{color:rgb(var(--fd-ok))}
+#flowView .webhook-delivery.rejected b,#flowView .webhook-delivery.failed b{color:rgb(var(--fd-rj))}
+#flowView .webhook-delivery small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

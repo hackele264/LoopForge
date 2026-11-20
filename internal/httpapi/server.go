@@ -73,6 +73,7 @@ type Server struct {
 	users           *usersHandlers // users.go
 	projects        *projectsHandlers
 	insights        *insightsHandlers
+	webhooks        *webhooksHandlers
 	businessDomains *businessDomainsHandlers
 	catalog         *catalogHandlers  // catalog.go
 	mcp             *mcpHandlers      // mcp.go
@@ -157,6 +158,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 		catalog:         &catalogHandlers{deps: d},
 		businessDomains: &businessDomainsHandlers{deps: d},
 		insights:        &insightsHandlers{deps: d},
+		webhooks:        &webhooksHandlers{deps: d},
 		projects:        &projectsHandlers{deps: d},
 		mcp:             &mcpHandlers{deps: d},
 		market:          &marketHandlers{deps: d},
@@ -487,6 +489,16 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.POST("/api/workflows/:id/clone", api.catalog.workflow)
 	g.GET("/api/workflow-metrics", api.runs.workflowMetrics)
 	g.POST(insightIngestPath, api.insights.ingest)
+	g.GET("/api/webhooks", api.webhooks.webhooks)
+	g.POST("/api/webhooks", api.webhooks.webhooks)
+	g.GET("/api/webhooks/:id", api.webhooks.webhook)
+	g.PUT("/api/webhooks/:id", api.webhooks.webhook)
+	g.DELETE("/api/webhooks/:id", api.webhooks.webhook)
+	g.POST("/api/webhooks/:id/rotate", api.webhooks.rotateSecret)
+	g.GET("/api/webhooks/:id/deliveries", api.webhooks.deliveries)
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodGet} {
+		g.Handle(method, webhookIngressPrefix+":id/:secret", api.webhooks.ingest)
+	}
 	g.GET("/api/insights/v1/sources", api.insights.sources)
 	g.POST("/api/insights/v1/sources", api.insights.sources)
 	g.DELETE("/api/insights/v1/sources/:id", api.insights.revokeSource)
@@ -859,7 +871,7 @@ func logging() gin.HandlerFunc {
 		start := time.Now()
 		c.Next()
 		log.Printf("[HTTP] %s %s -> %d (%d bytes, %s)",
-			c.Request.Method, redactAgentToolPath(c.Request.URL.Path),
+			c.Request.Method, redactWebhookPath(redactAgentToolPath(c.Request.URL.Path)),
 			c.Writer.Status(), c.Writer.Size(), time.Since(start).Truncate(time.Millisecond))
 	}
 }
@@ -869,7 +881,7 @@ func basicAuth(user, pass string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// The runner machine plane has its own bind/session authentication and
 		// must remain usable behind a gateway login or preview Basic Auth.
-		if c.Request.URL.Path == insightIngestPath || strings.HasPrefix(c.Request.URL.Path, "/runners/") || strings.HasPrefix(c.Request.URL.Path, "/internal/agent-tools/") {
+		if c.Request.URL.Path == insightIngestPath || strings.HasPrefix(c.Request.URL.Path, webhookIngressPrefix) || strings.HasPrefix(c.Request.URL.Path, "/runners/") || strings.HasPrefix(c.Request.URL.Path, "/internal/agent-tools/") {
 			c.Next()
 			return
 		}
