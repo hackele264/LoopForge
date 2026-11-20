@@ -789,6 +789,18 @@ var functions = map[string]func([]any) (any, error){
 	"startsWith": func(a []any) (any, error) { return stringPair("startsWith", a, strings.HasPrefix) },
 	"endsWith":   func(a []any) (any, error) { return stringPair("endsWith", a, strings.HasSuffix) },
 	"base64url":  stringFn("base64url", func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }),
+	"json": func(a []any) (any, error) {
+		if err := arity("json", a, 1); err != nil {
+			return nil, err
+		}
+		var b strings.Builder
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(a[0]); err != nil {
+			return nil, fmt.Errorf("json: %w", err)
+		}
+		return strings.TrimSuffix(b.String(), "\n"), nil
+	},
 	"str": func(a []any) (any, error) {
 		if err := arity("str", a, 1); err != nil {
 			return nil, err

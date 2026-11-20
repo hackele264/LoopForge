@@ -17,6 +17,10 @@ func TestHelperFunctions(t *testing.T) {
 		`str(trigger.n)`:                      "3",
 		`str(trigger.urls)`:                   `["http://a.example/x","http://b.example"]`,
 		`len(split("a b c", " ")) == 3`:       true,
+		`json("say \"hi\" <b>")`:              `"say \"hi\" <b>"`,
+		`json(trigger.urls)`:                  `["http://a.example/x","http://b.example"]`,
+		`json(trigger.n)`:                     `3`,
+		`json(null)`:                          `null`,
 	}
 	for src, want := range cases {
 		p, err := Compile(src)
