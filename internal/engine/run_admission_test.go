@@ -137,10 +137,12 @@ func TestSucceededRunAdmitsQueuedRunAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRun(t, s, first.ID, 3*time.Second, func(got domain.Run) bool { return got.Status == "succeeded" })
-	if len(e.admitKick) != 1 {
+	// The kick follows the succeeded write, so the status can be seen first.
+	select {
+	case <-e.admitKick:
+	case <-time.After(2 * time.Second):
 		t.Fatal("a succeeded run must kick admission")
 	}
-	<-e.admitKick
 	if started := e.admitQueued(); len(started) != 1 || started[0] != next.ID {
 		t.Fatalf("started=%v, want %s", started, next.ID)
 	}
@@ -184,5 +186,57 @@ func TestClaimLoopAdmitsQueuedRunOnKick(t *testing.T) {
 	waitRun(t, s, queued.ID, 3*time.Second, func(got domain.Run) bool { return got.Status == "waiting" })
 	if waited := time.Since(freed); waited > time.Second {
 		t.Fatalf("queued run started %s after the slot freed", waited)
+	}
+}
+
+// A raised limit admits many runs at once; they are taken over together and
+// all start, not one database round trip after another.
+func TestAdmittedRunsAreTakenOverInParallel(t *testing.T) {
+	t.Parallel()
+	s, _ := repo.OpenTest()
+	defer s.Close()
+	wf := domain.WorkflowDefinition{ID: "queue-burst", Name: "Queue", SandboxProfileID: "local", Nodes: []domain.WorkflowNode{{ID: "gate", Name: "Gate", Type: "approval", MaxAttempts: 1}}}
+	if err := s.PutWorkflow(wf); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutProject(domain.Project{ID: "p", Key: "p", Name: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < repo.ProjectRunLimit; i++ {
+		if err := s.PutRun(domain.Run{ID: fmt.Sprintf("occupied-%d", i), Status: "failed", ExecutionContext: domain.TelemetryContext{ProjectID: "p"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := New(s, runtime.NewManager(t.TempDir()))
+	e.ConfigureExecution("burst-worker", "burst-host", time.Minute, true)
+	defer e.Drain(context.Background())
+	var queued []string
+	for i := 0; i < 12; i++ {
+		r, err := e.StartWithRepositoriesContext(wf.ID, "", nil, domain.TelemetryContext{ProjectID: "p"})
+		if err != nil || r.Status != "queued" {
+			t.Fatalf("run=%+v err=%v", r, err)
+		}
+		queued = append(queued, r.ID)
+	}
+	if err := s.SetProjectRunLimit("p", 20); err != nil {
+		t.Fatal(err)
+	}
+	started := e.admitQueued()
+	if len(started) != 10 {
+		t.Fatalf("started %d runs, want the 10 that fit", len(started))
+	}
+	for i, id := range started {
+		if id != queued[i] {
+			t.Fatalf("started out of order: %v", started)
+		}
+		waitRun(t, s, id, 3*time.Second, func(got domain.Run) bool { return got.Status == "waiting" })
+	}
+	for _, id := range queued[10:] {
+		if r, _ := s.RunState(id); r.Status != "queued" {
+			t.Fatalf("%s is %s beyond the limit", id, r.Status)
+		}
+	}
+	for _, id := range queued {
+		_ = e.Cancel(id)
 	}
 }
