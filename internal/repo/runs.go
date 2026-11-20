@@ -937,9 +937,16 @@ func (r *RunsRepo) PutRun(v domain.Run) error {
 // run) is rolled back and retried with its bucket locked first, so a bucket
 // lock is never awaited while a run row is held.
 func (r *RunsRepo) writeRun(run domain.Run, expectedRevision ...int) error {
+	return r.writePlannedRun(run, nil, expectedRevision...)
+}
+
+// writePlannedRun is writeRun with an optional plan from RunStateForWrite's
+// base: while the stored row is still at the base revision, nodes, artifacts
+// and large header columns equal to base are left as stored.
+func (r *RunsRepo) writePlannedRun(run domain.Run, pre *runWritePlan, expectedRevision ...int) error {
 	lockKey := ""
 	for attempt := 0; ; attempt++ {
-		err := r.writeRunOnce(run, lockKey, expectedRevision...)
+		err := r.writeRunOnce(run, pre, lockKey, expectedRevision...)
 		var need *admissionLockRequired
 		if errors.As(err, &need) && attempt < 3 {
 			lockKey = need.key
@@ -949,7 +956,7 @@ func (r *RunsRepo) writeRun(run domain.Run, expectedRevision ...int) error {
 	}
 }
 
-func (r *RunsRepo) writeRunOnce(run domain.Run, lockKey string, expectedRevision ...int) error {
+func (r *RunsRepo) writeRunOnce(run domain.Run, pre *runWritePlan, lockKey string, expectedRevision ...int) error {
 	var opts []*sql.TxOptions
 	if lockKey != "" {
 		opts = r.admissionTxOptions()
@@ -1002,10 +1009,13 @@ func (r *RunsRepo) writeRunOnce(run domain.Run, lockKey string, expectedRevision
 				return err
 			}
 		}
+		// The fields are exported so gorm scans into them; with unexported
+		// fields every write saw zero and rewrote all events (and their
+		// notification checks), telemetry and logs it carried.
 		var cur struct {
-			logs      int64
-			telemetry int64
-			events    int64
+			Logs      int64
+			Telemetry int64
+			Events    int64
 		}
 		if err := tx.Raw(`SELECT
 			COALESCE((SELECT MAX(seq) FROM run_logs WHERE run_id=?), 0) AS logs,
@@ -1014,34 +1024,60 @@ func (r *RunsRepo) writeRunOnce(run domain.Run, lockKey string, expectedRevision
 			run.ID, run.ID, run.ID).Scan(&cur).Error; err != nil {
 			return err
 		}
-		// On conflict only the run header is refreshed. Lease fields
-		// (owner_instance_id, lease_until, execution_generation) and workspace
-		// bindings are owned by the lease operations and must survive PutRun.
-		// The control flags (cancel_requested/pause_requested) are likewise
-		// excluded: they are written exclusively via RequestRunControl/
-		// ClearRunControl, so a worker PutRun can never clobber an API-side
-		// cancel/pause request (master's writeRun has the same omission).
-		if err := upsertColumns(tx, "runs", runRowValues(run), []string{
-			"kind", "workflow_id", "status", "revision", "input", "human_context", "sandbox_id", "repository", "repositories", "snapshot",
-			"execution_context", "usage_json", "tool_calls", "telemetry_sequence",
-			"log_sequence", "workspace_cleaned_at", "updated_at", "admission_state", "queue_entered_at", "quota_project_id", "quota_parent_run_id", "quota_exempt", "quota_bucket",
-		}); err != nil {
+		// On conflict only the run header (runHeaderUpdateColumns) is
+		// refreshed. Lease fields (owner_instance_id, lease_until,
+		// execution_generation) and workspace bindings are owned by the lease
+		// operations and must survive PutRun. The control flags
+		// (cancel_requested/pause_requested) are likewise excluded: they are
+		// written exclusively via RequestRunControl/ClearRunControl, so a
+		// worker PutRun can never clobber an API-side cancel/pause request
+		// (master's writeRun has the same omission).
+		//
+		// A plan applies only while the row is still the one its base read: no
+		// other write (they all bump the revision) landed in between, so what
+		// it leaves out is exactly what is stored.
+		plan := pre
+		if plan != nil && (err != nil || current.Revision != plan.revision) {
+			plan = nil
+		}
+		values := runRowValues(run)
+		if plan != nil {
+			update := make(map[string]any, len(runHeaderUpdateColumns))
+			for _, col := range runHeaderUpdateColumns {
+				if plan.sameHeader(col, values[col]) {
+					continue
+				}
+				update[col] = values[col]
+			}
+			if err := tx.Model(&runRow{}).Where("id = ?", run.ID).Updates(update).Error; err != nil {
+				return fmt.Errorf("runs update %s: %w", run.ID, err)
+			}
+		} else if err := upsertColumns(tx, "runs", values, runHeaderUpdateColumns); err != nil {
 			return fmt.Errorf("runs upsert %s: %w", run.ID, err)
 		}
-		// Nodes: upsert every node of the run.
+		// Nodes: upsert every node of the run, or with a plan the changed ones.
 		for id, node := range run.Nodes {
 			if node == nil {
 				continue
 			}
+			var payload []byte
+			if plan != nil {
+				var changed bool
+				if payload, changed = plan.nodes[id]; !changed {
+					continue
+				}
+			} else {
+				payload = mustJSON(node)
+			}
 			if err := upsert(tx, "run_nodes", map[string]any{
-				"run_id": run.ID, "node_id": id, "status": node.Status, "attempt": node.Attempt, "payload": mustJSON(node),
+				"run_id": run.ID, "node_id": id, "status": node.Status, "attempt": node.Attempt, "payload": payload,
 			}); err != nil {
 				return err
 			}
 		}
 		// Events: append-only by index.
-		if int64(len(run.Events)) > cur.events {
-			for i := cur.events; i < int64(len(run.Events)); i++ {
+		if int64(len(run.Events)) > cur.Events {
+			for i := cur.Events; i < int64(len(run.Events)); i++ {
 				ev := run.Events[i]
 				if err := r.notifications.enqueueRunNotifications(tx, run, ev, i); err != nil {
 					return err
@@ -1056,7 +1092,7 @@ func (r *RunsRepo) writeRunOnce(run domain.Run, lockKey string, expectedRevision
 			}
 		}
 		for _, ev := range run.Telemetry {
-			if ev.Sequence == 0 || ev.Sequence <= cur.telemetry {
+			if ev.Sequence == 0 || ev.Sequence <= cur.Telemetry {
 				continue
 			}
 			if err := upsert(tx, "run_telemetry", map[string]any{
@@ -1066,7 +1102,7 @@ func (r *RunsRepo) writeRunOnce(run domain.Run, lockKey string, expectedRevision
 			}
 		}
 		for _, rec := range run.Logs {
-			if rec.Sequence == 0 || rec.Sequence <= cur.logs {
+			if rec.Sequence == 0 || rec.Sequence <= cur.Logs {
 				continue
 			}
 			if err := upsert(tx, "run_logs", map[string]any{
@@ -1076,6 +1112,9 @@ func (r *RunsRepo) writeRunOnce(run domain.Run, lockKey string, expectedRevision
 			}
 		}
 		for _, art := range run.Artifacts {
+			if plan != nil && plan.sameArtifact(art) {
+				continue
+			}
 			id := art.ID
 			if id == "" {
 				id = fmt.Sprintf("%s-%s-%d-%s", run.ID, art.NodeID, art.Attempt, art.Name)

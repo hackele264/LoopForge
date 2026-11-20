@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +27,27 @@ type runLocks struct {
 	locks map[string]*runLock
 
 	count, waitNs, holdNs, maxWaitNs, maxHoldNs atomic.Int64
+	holdHist                                    [holdBuckets]atomic.Int64
+}
+
+// Hold times are also counted in buckets that grow by sqrt(2) from 1µs, so a
+// percentile is known to within ~41%.
+const holdBuckets = 64
+
+func holdBucket(ns int64) int {
+	us := float64(ns) / 1e3
+	if us <= 1 {
+		return 0
+	}
+	b := int(math.Ceil(2 * math.Log2(us)))
+	if b >= holdBuckets {
+		return holdBuckets - 1
+	}
+	return b
+}
+
+func holdBucketUpper(b int) time.Duration {
+	return time.Duration(math.Pow(2, float64(b)/2) * 1e3)
 }
 
 // lock takes runID's lock and returns its release. Typical use:
@@ -55,6 +77,7 @@ func (l *runLocks) lock(runID string) func() {
 	return func() {
 		hold := time.Since(rl.acquired).Nanoseconds()
 		l.holdNs.Add(hold)
+		l.holdHist[holdBucket(hold)].Add(1)
 		storeMax(&l.maxHoldNs, hold)
 		rl.mu.Unlock()
 		l.mu.Lock()
@@ -83,12 +106,40 @@ type StateLockStats struct {
 	Wait, Hold   time.Duration
 	MaxWait      time.Duration
 	MaxHold      time.Duration
+	// HoldBuckets counts hold times per bucket; see HoldPercentile.
+	HoldBuckets [holdBuckets]int64
+}
+
+// HoldPercentile is the upper bound of the bucket holding the p-th hold time
+// among the acquisitions since base.
+func (s StateLockStats) HoldPercentile(base StateLockStats, p float64) time.Duration {
+	var total int64
+	for i := range s.HoldBuckets {
+		total += s.HoldBuckets[i] - base.HoldBuckets[i]
+	}
+	if total == 0 {
+		return 0
+	}
+	want := int64(math.Ceil(p * float64(total)))
+	var seen int64
+	for i := range s.HoldBuckets {
+		seen += s.HoldBuckets[i] - base.HoldBuckets[i]
+		if seen >= want {
+			return holdBucketUpper(i)
+		}
+	}
+	return holdBucketUpper(holdBuckets - 1)
 }
 
 // StateLockStats reports the run state locks' counters.
 func (e *Engine) StateLockStats() StateLockStats {
 	l := &e.stateLocks
+	var hist [holdBuckets]int64
+	for i := range hist {
+		hist[i] = l.holdHist[i].Load()
+	}
 	return StateLockStats{
+		HoldBuckets:  hist,
 		Acquisitions: l.count.Load(),
 		Wait:         time.Duration(l.waitNs.Load()),
 		Hold:         time.Duration(l.holdNs.Load()),

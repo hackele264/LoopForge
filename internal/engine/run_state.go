@@ -5,8 +5,31 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"time"
 )
+
+// stateWriteHook, when set (tests and load measurements only), sees every
+// state change updateRun makes: the engine call site outside this file and
+// whether the run was written. It must be set before the engine starts.
+var stateWriteHook func(runID, site string, wrote bool)
+
+func stateWriteSite() string {
+	pcs := make([]uintptr, 8)
+	n := goruntime.Callers(3, pcs)
+	frames := goruntime.CallersFrames(pcs[:n])
+	for {
+		f, more := frames.Next()
+		if !strings.HasSuffix(f.File, "/run_state.go") {
+			return fmt.Sprintf("%s:%d", filepath.Base(f.File), f.Line)
+		}
+		if !more {
+			return "?"
+		}
+	}
+}
 
 func (e *Engine) updateRun(id string, mutate func(*domain.Run)) {
 	_ = e.updateRunAt(id, false, mutate)
@@ -30,10 +53,19 @@ func (e *Engine) updateRunAt(id string, allowExpiredLease bool, mutate func(*dom
 
 // updateRunAtErr reports whether the run was stored and, when the store
 // rejected the write, that error. A skipped update (missing run or a lease
-// held elsewhere) is not an error.
+// held elsewhere) is not an error. An update that changes nothing persisted
+// is not written and counts as stored: the stored run already is the result.
+//
+// The write goes through RunStateForWrite/PutRunFrom, which store only the
+// nodes, artifacts and large header columns this update changed.
 func (e *Engine) updateRunAtErr(id string, allowExpiredLease bool, mutate func(*domain.Run)) (bool, error) {
+	stored := false
+	if hook := stateWriteHook; hook != nil {
+		site := stateWriteSite()
+		defer func() { hook(id, site, stored) }()
+	}
 	defer e.stateLocks.lock(id)()
-	r, ok := e.repo.RunState(id)
+	r, base, ok := e.repo.RunStateForWrite(id)
 	if !ok {
 		_ = e.takePendingObservations(id)
 		return false, nil
@@ -52,14 +84,30 @@ func (e *Engine) updateRunAtErr(id string, allowExpiredLease bool, mutate func(*
 	if mutate != nil {
 		mutate(&r)
 	}
-	if err := e.repo.PutRun(r); err != nil {
+	wrote, err := e.repo.PutRunFrom(r, base)
+	if err != nil {
 		log.Printf("put run %s: %v", id, err)
 		return false, err
 	}
-	if current, ok := e.repo.RunStreamView(id); ok {
-		e.publishRun(current)
+	if !wrote {
+		return true, nil
+	}
+	stored = true
+	// Reading the stream view back is a full run read; only do it for
+	// someone listening. A subscriber that arrives later reads the stored run
+	// itself and polls for revisions after that.
+	if e.hasSubscribers(id) {
+		if current, ok := e.repo.RunStreamView(id); ok {
+			e.publishRun(current)
+		}
 	}
 	return true, nil
+}
+
+func (e *Engine) hasSubscribers(runID string) bool {
+	e.subMu.Lock()
+	defer e.subMu.Unlock()
+	return len(e.subs[runID]) > 0
 }
 
 // Subscribe provides provider-neutral live run snapshots. Slow clients receive

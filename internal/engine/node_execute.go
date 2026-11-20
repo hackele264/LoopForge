@@ -175,8 +175,13 @@ func (e *Engine) execute(ctx context.Context, runID string) {
 			time.Sleep(80 * time.Millisecond)
 			continue
 		}
-		for _, node := range ready {
-			node := node
+		// Several ready nodes (a fan-out) start with one run write; the rest,
+		// and a single ready node, start themselves in executeNode.
+		var started []startedNode
+		if len(ready) > 1 {
+			started, ready = e.startReadyNodes(runID, ready)
+		}
+		spawn := func(node domain.WorkflowNode, run func()) {
 			inflightMu.Lock()
 			inflight[node.ID] = true
 			inflightMu.Unlock()
@@ -192,8 +197,19 @@ func (e *Engine) execute(ctx context.Context, runID string) {
 					default:
 					}
 				}()
-				e.executeNode(ctx, runID, wf, node)
+				run()
 			}()
+		}
+		for _, sn := range started {
+			sn := sn
+			spawn(sn.node, func() {
+				defer sn.unlock()
+				e.runStartedNode(ctx, runID, wf, sn.node, sn.attempt, generation)
+			})
+		}
+		for _, node := range ready {
+			node := node
+			spawn(node, func() { e.executeNode(ctx, runID, wf, node) })
 		}
 	}
 }
@@ -325,6 +341,21 @@ func dockerfileID(snap *domain.RunnerSandboxSpec) string {
 	return snap.Dockerfile.ID
 }
 
+// actionNodeActivity is the activity executeActionNode shows while its
+// connector action runs. Setting it with the start write makes that later
+// update a no-op that is not written, saving one run write per action node.
+// It must stay equal to the label executeActionNode sets.
+func actionNodeActivity(node domain.WorkflowNode) (string, bool) {
+	if node.Type != connector.NodeType || node.Action == nil {
+		return "", false
+	}
+	c, a, ok := connector.Default().Action(node.Action.Connector, node.Action.Action)
+	if !ok {
+		return "", false
+	}
+	return "正在执行动作 " + c.Title + " · " + a.Title, true
+}
+
 func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.WorkflowDefinition, node domain.WorkflowNode) {
 	currentLease, ok := e.repo.RunState(runID)
 	if !ok || !e.ownsRun(currentLease) {
@@ -334,33 +365,106 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 	// node (a resume, rework or takeover racing a winding-down attempt) waits.
 	unlock := e.lockNodeExec(runID, node.ID)
 	defer unlock()
-	executionGeneration := currentLease.Generation
 	executionAttempt := 0
 	started := false
 	e.updateRun(runID, func(r *domain.Run) {
-		nr := r.Nodes[node.ID]
-		if nr.Status != "pending" {
-			return
-		}
-		if nr.Error != "" && runtime.IsCwdMountFailure(errors.New(nr.Error)) {
-			nr.Status = "failed"
-			e.event(r, node.ID, "node.failed", nr.Error)
-			return
-		}
-		started = true
-		r.Status = "running"
-		nr.Status = "running"
-		if !continuingInterruptedAttempt(nr) {
-			nr.Attempt++
-		}
-		executionAttempt = nr.Attempt
-		nr.StartedAt = time.Now().UTC()
-		nr.GateResult = nil
-		e.event(r, node.ID, "node.started", node.Name+" 开始执行")
+		executionAttempt, started = e.startNode(r, node)
 	})
 	if !started {
 		return
 	}
+	e.runStartedNode(ctx, runID, wf, node, executionAttempt, currentLease.Generation)
+}
+
+// startNode moves a pending node to running in r for a new (or continued)
+// attempt and reports that attempt. A node that is no longer pending is left
+// alone; a pending node whose last error was a cwd mount failure fails.
+func (e *Engine) startNode(r *domain.Run, node domain.WorkflowNode) (int, bool) {
+	nr := r.Nodes[node.ID]
+	if nr.Status != "pending" {
+		return 0, false
+	}
+	if nr.Error != "" && runtime.IsCwdMountFailure(errors.New(nr.Error)) {
+		nr.Status = "failed"
+		e.event(r, node.ID, "node.failed", nr.Error)
+		return 0, false
+	}
+	r.Status = "running"
+	nr.Status = "running"
+	if !continuingInterruptedAttempt(nr) {
+		nr.Attempt++
+	}
+	nr.StartedAt = time.Now().UTC()
+	nr.GateResult = nil
+	if activity, ok := actionNodeActivity(node); ok {
+		nr.Activity = activity
+	}
+	e.event(r, node.ID, "node.started", node.Name+" 开始执行")
+	return nr.Attempt, true
+}
+
+// startReadyNodes starts several ready nodes with one run write instead of
+// one write each. It holds each node's execution lock across the write, as
+// executeNode does; a node whose lock is busy (an earlier attempt still
+// winding down) is left to executeNode. The returned nodes are started and
+// still locked: the caller runs each with runStartedNode and releases it.
+func (e *Engine) startReadyNodes(runID string, ready []domain.WorkflowNode) (started []startedNode, rest []domain.WorkflowNode) {
+	var locked []startedNode
+	for _, node := range ready {
+		unlock, ok := e.tryLockNodeExec(runID, node.ID)
+		if !ok {
+			rest = append(rest, node)
+			continue
+		}
+		locked = append(locked, startedNode{node: node, unlock: unlock})
+	}
+	if len(locked) < 2 {
+		for _, l := range locked {
+			l.unlock()
+			rest = append(rest, l.node)
+		}
+		return nil, rest
+	}
+	attempts := map[string]int{}
+	stored := e.updateRunAt(runID, false, func(r *domain.Run) {
+		// executeNode's ownership check, made on the state being written.
+		if !e.ownsRun(*r) {
+			return
+		}
+		for _, l := range locked {
+			if attempt, ok := e.startNode(r, l.node); ok {
+				attempts[l.node.ID] = attempt
+			}
+		}
+	})
+	for _, l := range locked {
+		attempt, ok := attempts[l.node.ID]
+		if !stored {
+			// Not written (store error or lease lost): let executeNode try
+			// each node on its own, as before batching.
+			l.unlock()
+			rest = append(rest, l.node)
+			continue
+		}
+		if !ok {
+			l.unlock()
+			continue
+		}
+		l.attempt = attempt
+		started = append(started, l)
+	}
+	return started, rest
+}
+
+type startedNode struct {
+	node    domain.WorkflowNode
+	attempt int
+	unlock  func()
+}
+
+// runStartedNode executes a node attempt that startNode has stored as
+// running. The caller holds the node's execution lock throughout.
+func (e *Engine) runStartedNode(ctx context.Context, runID string, wf domain.WorkflowDefinition, node domain.WorkflowNode, executionAttempt, executionGeneration int) {
 	ctx, cancelNode := context.WithCancel(ctx)
 	defer cancelNode()
 	defer e.registerNodeExecution(runID, node.ID, executionAttempt, cancelNode)()

@@ -62,8 +62,46 @@ func (k *keyedLocks) lock(key string) func() {
 	}
 }
 
+// tryLock is lock without waiting: ok is false when key is already held.
+func (k *keyedLocks) tryLock(key string) (unlock func(), ok bool) {
+	k.mu.Lock()
+	if k.locks == nil {
+		k.locks = map[string]*keyedLock{}
+	}
+	entry := k.locks[key]
+	if entry == nil {
+		entry = &keyedLock{}
+		k.locks[key] = entry
+	}
+	if !entry.mu.TryLock() {
+		if entry.refs == 0 {
+			delete(k.locks, key)
+		}
+		k.mu.Unlock()
+		return nil, false
+	}
+	entry.refs++
+	k.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			entry.mu.Unlock()
+			k.mu.Lock()
+			entry.refs--
+			if entry.refs == 0 {
+				delete(k.locks, key)
+			}
+			k.mu.Unlock()
+		})
+	}, true
+}
+
 func (e *Engine) lockNodeExec(runID, nodeID string) func() {
 	return e.execLocks.lock("node\x00" + runID + "\x00" + nodeID)
+}
+
+func (e *Engine) tryLockNodeExec(runID, nodeID string) (func(), bool) {
+	return e.execLocks.tryLock("node\x00" + runID + "\x00" + nodeID)
 }
 
 func (e *Engine) lockAgentInvocation(workspaceOwner, agentID string) func() {

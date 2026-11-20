@@ -20,6 +20,8 @@ import (
 	"agentflow/internal/domain"
 	"agentflow/internal/repo"
 	"agentflow/internal/runtime"
+
+	"gorm.io/gorm"
 )
 
 // TestStateLockLoad measures how far one engine instance carries a burst of
@@ -60,6 +62,9 @@ func TestStateLockLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	writes := newWriteMeter(t, s.DB)
+	stateWriteHook = writes.site
+	defer func() { stateWriteHook = nil }()
 	e := New(s, runtime.NewManager(filepath.Join(t.TempDir(), "workspaces")))
 	// Production starts the claim loop; it also promotes queued runs.
 	ctx, stop := context.WithCancel(context.Background())
@@ -112,6 +117,7 @@ func TestStateLockLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	writes.reset()
 	before := e.StateLockStats()
 	burstStart := time.Now()
 	ids := make([]string, runs)
@@ -195,7 +201,105 @@ func TestStateLockLoad(t *testing.T) {
 	t.Logf("per-run latency (created to finished): p50=%s p95=%s max=%s", pct(0.5).Round(time.Millisecond), pct(0.95).Round(time.Millisecond), lat[len(lat)-1].Round(time.Millisecond))
 	t.Logf("state lock: %d acquisitions (%.1f per run), avg hold %s, max hold %s, %.1f runs holding their lock on average", acq, float64(acq)/float64(runs), (hold / time.Duration(max64(acq, 1))).Round(time.Microsecond), after.MaxHold.Round(time.Millisecond), hold.Seconds()/wall.Seconds())
 	t.Logf("state lock wait: avg %s, max %s, total %s", (wait / time.Duration(max64(acq, 1))).Round(time.Microsecond), after.MaxWait.Round(time.Millisecond), wait.Round(time.Millisecond))
+	t.Logf("state lock hold: p50<=%s p95<=%s p99<=%s", after.HoldPercentile(before, 0.5), after.HoldPercentile(before, 0.95), after.HoldPercentile(before, 0.99))
 	t.Logf("state changes: %.0f/s over the burst", float64(acq)/wall.Seconds())
+	writes.report(t, runs)
+}
+
+// writeMeter counts the rows and bound bytes the run store writes, per table,
+// and the engine's updateRun calls per call site.
+type writeMeter struct {
+	mu     sync.Mutex
+	rows   map[string]int64
+	bytes  map[string]int64
+	calls  map[string]int64
+	stored map[string]int64
+}
+
+func newWriteMeter(t *testing.T, db *gorm.DB) *writeMeter {
+	m := &writeMeter{}
+	m.reset()
+	count := func(tx *gorm.DB) {
+		if tx.Error != nil || tx.Statement == nil {
+			return
+		}
+		n := int64(0)
+		for _, v := range tx.Statement.Vars {
+			n += varBytes(v)
+		}
+		m.mu.Lock()
+		m.rows[tx.Statement.Table]++
+		m.bytes[tx.Statement.Table] += n
+		m.mu.Unlock()
+	}
+	if err := db.Callback().Create().After("gorm:create").Register("load:count_create", count); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Callback().Update().After("gorm:update").Register("load:count_update", count); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func varBytes(v any) int64 {
+	switch x := v.(type) {
+	case string:
+		return int64(len(x))
+	case []byte:
+		return int64(len(x))
+	case json.RawMessage:
+		return int64(len(x))
+	case domain.RawJSON:
+		return int64(len(x))
+	case nil:
+		return 0
+	default:
+		return 8
+	}
+}
+
+func (m *writeMeter) reset() {
+	m.mu.Lock()
+	m.rows, m.bytes, m.calls, m.stored = map[string]int64{}, map[string]int64{}, map[string]int64{}, map[string]int64{}
+	m.mu.Unlock()
+}
+
+func (m *writeMeter) site(_, site string, wrote bool) {
+	m.mu.Lock()
+	m.calls[site]++
+	if wrote {
+		m.stored[site]++
+	}
+	m.mu.Unlock()
+}
+
+func (m *writeMeter) report(t *testing.T, runs int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	per := func(v int64) float64 { return float64(v) / float64(runs) }
+	var tables []string
+	var totalBytes int64
+	for k := range m.rows {
+		tables = append(tables, k)
+		totalBytes += m.bytes[k]
+	}
+	sort.Strings(tables)
+	t.Logf("writes per run: %.1f run header writes, %.0f bytes bound in all (%.0f KiB total)", per(m.rows["runs"]), per(totalBytes), float64(totalBytes)/1024)
+	for _, k := range tables {
+		t.Logf("  table %-16s %7.1f rows/run %9.0f bytes/run", k, per(m.rows[k]), per(m.bytes[k]))
+	}
+	var sites []string
+	var calls, stored int64
+	for k := range m.calls {
+		sites = append(sites, k)
+		calls += m.calls[k]
+		stored += m.stored[k]
+	}
+	sort.Slice(sites, func(i, j int) bool { return m.calls[sites[i]] > m.calls[sites[j]] })
+	t.Logf("updateRun: %.1f calls/run, %.1f stored/run", per(calls), per(stored))
+	for _, k := range sites {
+		t.Logf("  %-28s %5.2f calls/run %5.2f stored/run", k, per(m.calls[k]), per(m.stored[k]))
+	}
 }
 
 func envInt(name string, def int) int {
