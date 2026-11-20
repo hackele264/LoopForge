@@ -178,76 +178,110 @@ func (e *Engine) ResumeInterruptedRuns() []string {
 		if listed.Status != "running" {
 			continue
 		}
-		r, ok := e.repo.RunState(listed.ID)
-		if !ok || r.Status != "running" {
-			continue
+		if e.takeOverRun(listed.ID) {
+			resumed = append(resumed, listed.ID)
 		}
-		if r.OwnerInstanceID != "" && r.LeaseUntil.After(time.Now().UTC()) {
-			continue
-		}
-		e.mu.Lock()
-		_, live := e.running[r.ID]
-		e.mu.Unlock()
-		if live {
-			continue
-		}
-		// A run whose workspace is still served by another live host can never
-		// be resumed here, but settling a cancel or pause only writes run
-		// state, and cleanupWorkspace already refuses foreign binds. Claiming
-		// those two still has to happen or the run stays "running" forever: the
-		// API process has execution disabled, so Engine.Cancel cannot settle it
-		// either. A bind to a host that is gone is taken over and rebuilt.
-		blocked := e.workspaceBlocked(r)
-		if blocked && !r.CancelRequested && !r.PauseRequested {
-			continue
-		}
-		previousOwner := r.OwnerInstanceID
-		acquired, err := e.acquireLease(r)
-		if err != nil {
-			continue
-		}
-		if r.CancelRequested || acquired.CancelRequested {
-			_ = e.cancelRunnerTasksForRun(r.ID)
-			e.settleOrphan(r.ID, "运行已被手动终止")
-			_ = e.repo.ReleaseRunLease(r.ID, e.instanceID, acquired.Generation)
-			continue
-		}
-		if r.PauseRequested || acquired.PauseRequested {
-			_ = e.cancelRunnerTasksForRun(r.ID)
-			e.pauseAt(r.ID, acquired.Generation, "运行已由用户暂停")
-			_ = e.repo.ReleaseRunLease(r.ID, e.instanceID, acquired.Generation)
-			continue
-		}
-		if blocked {
-			// The control request was withdrawn between the check above and the
-			// lease. Hand the run back instead of resuming another host's bind.
-			_ = e.repo.ReleaseRunLease(r.ID, e.instanceID, acquired.Generation)
-			continue
-		}
-		if e.workspaceLost(acquired) {
-			message := e.workspaceLostMessage(acquired)
-			// Move the bind here so a rerun starts from a fresh checkout
-			// instead of failing on the dead host again. A child follows its
-			// parent's bind, which the parent's own recovery moves.
-			if !sharesWorkspace(acquired) {
-				if err := e.rebindWorkspaceHere(acquired, true); err != nil {
-					log.Printf("rebind lost workspace %s: %v", r.ID, err)
-				}
-			}
-			e.settleOrphan(r.ID, message)
-			_ = e.repo.ReleaseRunLease(r.ID, e.instanceID, acquired.Generation)
-			continue
-		}
-		e.updateRun(r.ID, func(current *domain.Run) {
-			resetInFlightNodesForResume(current, "执行实例退出，等待恢复")
-			current.Status = "running"
-			e.event(current, "", "run.resumed", fmt.Sprintf("服务恢复后继续执行（generation=%d, previousOwner=%s）", acquired.Generation, previousOwner))
-		})
-		e.observe(r.ID, "", domain.TelemetryEvent{Category: "orchestration", Name: "run.resumed", Phase: "start", Message: "过期执行租约已接管", Attributes: map[string]any{"generation": acquired.Generation, "previousOwner": previousOwner}})
-		e.resume(r.ID)
-		resumed = append(resumed, r.ID)
 	}
 	return resumed
+}
+
+// takeOverRun takes over a running run that no live instance owns (a
+// crashed owner, or a queued run just admitted) and resumes it here.
+func (e *Engine) takeOverRun(id string) bool {
+	r, ok := e.repo.RunState(id)
+	if !ok || r.Status != "running" {
+		return false
+	}
+	if r.OwnerInstanceID != "" && r.LeaseUntil.After(time.Now().UTC()) {
+		return false
+	}
+	e.mu.Lock()
+	_, live := e.running[r.ID]
+	e.mu.Unlock()
+	if live {
+		return false
+	}
+	// A run whose workspace is still served by another live host can never
+	// be resumed here, but settling a cancel or pause only writes run
+	// state, and cleanupWorkspace already refuses foreign binds. Claiming
+	// those two still has to happen or the run stays "running" forever: the
+	// API process has execution disabled, so Engine.Cancel cannot settle it
+	// either. A bind to a host that is gone is taken over and rebuilt.
+	blocked := e.workspaceBlocked(r)
+	if blocked && !r.CancelRequested && !r.PauseRequested {
+		return false
+	}
+	previousOwner := r.OwnerInstanceID
+	acquired, err := e.acquireLease(r)
+	if err != nil {
+		return false
+	}
+	if r.CancelRequested || acquired.CancelRequested {
+		_ = e.cancelRunnerTasksForRun(r.ID)
+		e.settleOrphan(r.ID, "运行已被手动终止")
+		_ = e.repo.ReleaseRunLease(r.ID, e.instanceID, acquired.Generation)
+		return false
+	}
+	if r.PauseRequested || acquired.PauseRequested {
+		_ = e.cancelRunnerTasksForRun(r.ID)
+		e.pauseAt(r.ID, acquired.Generation, "运行已由用户暂停")
+		_ = e.repo.ReleaseRunLease(r.ID, e.instanceID, acquired.Generation)
+		return false
+	}
+	if blocked {
+		// The control request was withdrawn between the check above and the
+		// lease. Hand the run back instead of resuming another host's bind.
+		_ = e.repo.ReleaseRunLease(r.ID, e.instanceID, acquired.Generation)
+		return false
+	}
+	if e.workspaceLost(acquired) {
+		message := e.workspaceLostMessage(acquired)
+		// Move the bind here so a rerun starts from a fresh checkout
+		// instead of failing on the dead host again. A child follows its
+		// parent's bind, which the parent's own recovery moves.
+		if !sharesWorkspace(acquired) {
+			if err := e.rebindWorkspaceHere(acquired, true); err != nil {
+				log.Printf("rebind lost workspace %s: %v", r.ID, err)
+			}
+		}
+		e.settleOrphan(r.ID, message)
+		_ = e.repo.ReleaseRunLease(r.ID, e.instanceID, acquired.Generation)
+		return false
+	}
+	e.updateRun(r.ID, func(current *domain.Run) {
+		resetInFlightNodesForResume(current, "执行实例退出，等待恢复")
+		current.Status = "running"
+		e.event(current, "", "run.resumed", fmt.Sprintf("服务恢复后继续执行（generation=%d, previousOwner=%s）", acquired.Generation, previousOwner))
+	})
+	e.observe(r.ID, "", domain.TelemetryEvent{Category: "orchestration", Name: "run.resumed", Phase: "start", Message: "过期执行租约已接管", Attributes: map[string]any{"generation": acquired.Generation, "previousOwner": previousOwner}})
+	e.resume(r.ID)
+	return true
+}
+
+// admitQueued promotes queued runs that now fit their project's limit and
+// starts them here at once, instead of on the next claim loop tick.
+func (e *Engine) admitQueued() []string {
+	promoted, err := e.repo.PromoteQueuedRuns()
+	if err != nil {
+		log.Printf("promote queued runs: %v", err)
+	}
+	var started []string
+	for _, id := range promoted {
+		e.publish(id)
+		if e.takeOverRun(id) {
+			started = append(started, id)
+		}
+	}
+	return started
+}
+
+// kickAdmission asks the claim loop to admit queued runs now. Kicks that
+// arrive while a pass is pending fold into it.
+func (e *Engine) kickAdmission() {
+	select {
+	case e.admitKick <- struct{}{}:
+	default:
+	}
 }
 
 // RecoverInterruptedRuns keeps the old name for callers/tests that still refer to it.

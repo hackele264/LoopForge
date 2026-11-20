@@ -102,3 +102,87 @@ func TestQueuedSOPAutomaticallyStartsAfterSuccess(t *testing.T) {
 	}
 	e.Drain(context.Background())
 }
+
+// A run that succeeds frees its project's slot, and the queued run behind
+// it starts right away instead of on the next claim loop tick.
+func TestSucceededRunAdmitsQueuedRunAtOnce(t *testing.T) {
+	t.Parallel()
+	s, _ := repo.OpenTest()
+	defer s.Close()
+	wf := domain.WorkflowDefinition{ID: "queue-handoff", Name: "Queue", SandboxProfileID: "local", Nodes: []domain.WorkflowNode{{ID: "gate", Name: "Gate", Type: "approval", MaxAttempts: 1}}}
+	if err := s.PutWorkflow(wf); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < repo.ProjectRunLimit-1; i++ {
+		if err := s.PutRun(domain.Run{ID: fmt.Sprintf("occupied-%d", i), Status: "failed", ExecutionContext: domain.TelemetryContext{ProjectID: "p"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := New(s, runtime.NewManager(t.TempDir()))
+	e.ConfigureExecution("queue-worker", "queue-host", time.Minute, true)
+	defer e.Drain(context.Background())
+	first, err := e.StartWithRepositoriesContext(wf.ID, "", nil, domain.TelemetryContext{ProjectID: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRun(t, s, first.ID, 3*time.Second, func(got domain.Run) bool { return got.Status == "waiting" })
+	next, err := e.StartWithRepositoriesContext(wf.ID, "", nil, domain.TelemetryContext{ProjectID: "p"})
+	if err != nil || next.Status != "queued" {
+		t.Fatalf("run=%+v err=%v", next, err)
+	}
+	if len(e.admitKick) != 0 {
+		t.Fatal("admission kicked before any run succeeded")
+	}
+	if err := e.Approve(first.ID, "gate", ""); err != nil {
+		t.Fatal(err)
+	}
+	waitRun(t, s, first.ID, 3*time.Second, func(got domain.Run) bool { return got.Status == "succeeded" })
+	if len(e.admitKick) != 1 {
+		t.Fatal("a succeeded run must kick admission")
+	}
+	<-e.admitKick
+	if started := e.admitQueued(); len(started) != 1 || started[0] != next.ID {
+		t.Fatalf("started=%v, want %s", started, next.ID)
+	}
+	waitRun(t, s, next.ID, 3*time.Second, func(got domain.Run) bool { return got.Status == "waiting" })
+}
+
+// With the claim loop running, the hand-off takes far less than its 2s tick.
+func TestClaimLoopAdmitsQueuedRunOnKick(t *testing.T) {
+	t.Parallel()
+	s, _ := repo.OpenTest()
+	defer s.Close()
+	wf := domain.WorkflowDefinition{ID: "queue-kick", Name: "Queue", SandboxProfileID: "local", Nodes: []domain.WorkflowNode{{ID: "gate", Name: "Gate", Type: "approval", MaxAttempts: 1}}}
+	if err := s.PutWorkflow(wf); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < repo.ProjectRunLimit; i++ {
+		if err := s.PutRun(domain.Run{ID: fmt.Sprintf("occupied-%d", i), Status: "failed", ExecutionContext: domain.TelemetryContext{ProjectID: "p"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := New(s, runtime.NewManager(t.TempDir()))
+	e.ConfigureExecution("queue-worker", "queue-host", time.Minute, true)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	defer e.Drain(context.Background())
+	queued, err := e.StartWithRepositoriesContext(wf.ID, "", nil, domain.TelemetryContext{ProjectID: "p"})
+	if err != nil || queued.Status != "queued" {
+		t.Fatalf("run=%+v err=%v", queued, err)
+	}
+	e.StartClaimLoop(ctx)
+	// Let the loop's first pass go by, so only a kick can admit the run
+	// before the next tick.
+	time.Sleep(200 * time.Millisecond)
+	held, _ := s.RunState("occupied-0")
+	held.Status = "succeeded"
+	if err := s.PutRun(held); err != nil {
+		t.Fatal(err)
+	}
+	freed := time.Now()
+	e.kickAdmission()
+	waitRun(t, s, queued.ID, 3*time.Second, func(got domain.Run) bool { return got.Status == "waiting" })
+	if waited := time.Since(freed); waited > time.Second {
+		t.Fatalf("queued run started %s after the slot freed", waited)
+	}
+}

@@ -92,6 +92,9 @@ type Engine struct {
 	obsMu      sync.Mutex
 	obsPending []pendingObservation
 	obsKick    chan struct{}
+	// admitKick wakes the claim loop to admit queued runs when a run frees
+	// its project's slot.
+	admitKick chan struct{}
 
 	WorkspaceActive              func(domain.Run) bool
 	WorkspaceCheckpointTransport func(context.Context, domain.Run, domain.RunnerWorkspaceRequest) (domain.RunnerWorkspaceResponse, error)
@@ -102,7 +105,7 @@ var ErrExecutionDisabled = errors.New("run execution is disabled on this instanc
 
 func New(s *repo.Store, sm *runtime.Manager) *Engine {
 	host, _ := os.Hostname()
-	e := &Engine{repo: s, sandboxes: sm, runner: runtime.NewExecutorRunner(), running: map[string]context.CancelFunc{}, runEnvs: map[string]*runEnvironment{}, workspaceFacts: map[string]domain.RunnerWorkspaceFacts{}, subs: map[string]map[chan domain.Run]struct{}{}, runnerTaskSubs: map[string]map[chan struct{}]struct{}{}, instanceID: fmt.Sprintf("%s-%d", host, os.Getpid()), workspaceHost: host, leaseTTL: 30 * time.Second, executeRuns: true, obsKick: make(chan struct{}, 1), actions: connector.NewExecutor(nil, nil)}
+	e := &Engine{repo: s, sandboxes: sm, runner: runtime.NewExecutorRunner(), running: map[string]context.CancelFunc{}, runEnvs: map[string]*runEnvironment{}, workspaceFacts: map[string]domain.RunnerWorkspaceFacts{}, subs: map[string]map[chan domain.Run]struct{}{}, runnerTaskSubs: map[string]map[chan struct{}]struct{}{}, instanceID: fmt.Sprintf("%s-%d", host, os.Getpid()), workspaceHost: host, leaseTTL: 30 * time.Second, executeRuns: true, obsKick: make(chan struct{}, 1), admitKick: make(chan struct{}, 1), actions: connector.NewExecutor(nil, nil)}
 	return e
 }
 

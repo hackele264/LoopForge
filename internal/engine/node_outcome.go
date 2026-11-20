@@ -364,6 +364,11 @@ func (e *Engine) finishAt(id string, generation int, status, msg string) {
 	}) || ignored {
 		return
 	}
+	// Only a succeeded run frees its project's slot (repo admission counts
+	// failed and waiting runs); hand it to the next queued run now.
+	if status == "succeeded" {
+		e.kickAdmission()
+	}
 	// Resolving MRs calls Gongfeng, so it runs outside the run state lock.
 	if delivered != nil {
 		_ = e.repo.MarkIssueDeliveredFromSOPMRs(delivered.ExecutionContext.IssueID, e.deliveryMRsFromRun(*delivered), deliveredAt)
