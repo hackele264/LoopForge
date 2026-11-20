@@ -45,9 +45,13 @@ type TelemetryContext struct {
 	IssueNumber           int    `json:"issueNumber,omitempty"`
 	TaskID                string `json:"taskId,omitempty"`
 	ScheduleJobID         string `json:"scheduleJobId,omitempty"`
-	RunID                 string `json:"runId"`
-	ParentRunID           string `json:"parentRunId,omitempty"`
-	ParentNodeID          string `json:"parentNodeId,omitempty"`
+	// CaseID links a run to the security case it works on; CaseTriggerID
+	// names the case trigger that started it, if any.
+	CaseID        string `json:"caseId,omitempty"`
+	CaseTriggerID string `json:"caseTriggerId,omitempty"`
+	RunID         string `json:"runId"`
+	ParentRunID   string `json:"parentRunId,omitempty"`
+	ParentNodeID  string `json:"parentNodeId,omitempty"`
 	// WorkspaceRunID names the run that owns the workspace a child SOP works
 	// in: the top-level run of its SOP chain. Empty means the run owns its
 	// own workspace.

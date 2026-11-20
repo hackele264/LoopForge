@@ -346,6 +346,7 @@ type runRow struct {
 	Revision           int        `gorm:"column:revision"`
 	Input              string     `gorm:"column:input;type:text"`
 	TriggerPayload     []byte     `gorm:"column:trigger_payload;type:json"`
+	CaseID             string     `gorm:"column:case_id;size:64;index:idx_runs_case"`
 	HumanContext       string     `gorm:"column:human_context;type:text"`
 	CancelRequested    bool       `gorm:"column:cancel_requested"`
 	PauseRequested     bool       `gorm:"column:pause_requested"`
@@ -753,6 +754,7 @@ func allModels() []any {
 		userRow{}, localAccountRow{}, userConfigRow{}, gitSSHKeyRow{}, gitHTTPCredentialRow{}, authIntegrationRow{}, platformCodeBuddyKeyRow{}, apiTokenRow{}, genericTemplateRow{},
 		insightSourceRow{}, insightExecutionRow{},
 		webhookRow{}, webhookDedupRow{}, webhookDeliveryRow{},
+		alertRow{}, caseRow{}, caseCounterRow{}, caseIOCRow{}, caseEventRow{}, caseTriggerRow{},
 		projectRow{}, projectMemberRow{}, repositoryRow{}, businessDomainRow{}, businessDomainAssignmentRow{},
 		agentRow{}, ruleRow{}, skillRow{}, skillFileRow{}, mcpServerRow{}, mcpFileRow{}, executorRow{},
 		dockerfileRow{}, environmentRow{}, sandboxRow{},

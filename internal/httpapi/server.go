@@ -74,6 +74,7 @@ type Server struct {
 	projects        *projectsHandlers
 	insights        *insightsHandlers
 	webhooks        *webhooksHandlers
+	cases           *casesHandlers
 	businessDomains *businessDomainsHandlers
 	catalog         *catalogHandlers  // catalog.go
 	mcp             *mcpHandlers      // mcp.go
@@ -158,7 +159,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 		catalog:         &catalogHandlers{deps: d},
 		businessDomains: &businessDomainsHandlers{deps: d},
 		insights:        &insightsHandlers{deps: d},
-		webhooks:        &webhooksHandlers{deps: d},
+		cases:           &casesHandlers{deps: d},
 		projects:        &projectsHandlers{deps: d},
 		mcp:             &mcpHandlers{deps: d},
 		market:          &marketHandlers{deps: d},
@@ -179,6 +180,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	e.WorkspaceActive = func(run domain.Run) bool { return api.runs.terminals.HasRunScope(run.ID) }
 	api.catalog.notifications = api.notifications
 	api.schedule.notifications = api.notifications
+	api.webhooks = &webhooksHandlers{deps: d, cases: api.cases}
 	if syncSvc != nil {
 		e.MergeIntoBranch = syncSvc.EnsureAndMergeBranchMR
 		e.FindBranchMR = syncSvc.FindBranchMR
@@ -489,6 +491,20 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.POST("/api/workflows/:id/clone", api.catalog.workflow)
 	g.GET("/api/workflow-metrics", api.runs.workflowMetrics)
 	g.POST(insightIngestPath, api.insights.ingest)
+	g.GET("/api/alerts", api.cases.alerts)
+	g.GET("/api/alerts/:id", api.cases.alert)
+	g.POST("/api/alerts/:id/escalate", api.cases.escalateAlert)
+	g.GET("/api/cases", api.cases.cases)
+	g.POST("/api/cases", api.cases.cases)
+	g.GET("/api/cases/:id", api.cases.caseByID)
+	g.PUT("/api/cases/:id", api.cases.caseByID)
+	g.POST("/api/cases/:id/comments", api.cases.comment)
+	g.POST("/api/cases/:id/iocs", api.cases.addIOC)
+	g.POST("/api/cases/:id/runs", api.cases.runPlaybook)
+	g.GET("/api/case-triggers", api.cases.caseTriggers)
+	g.POST("/api/case-triggers", api.cases.caseTriggers)
+	g.PUT("/api/case-triggers/:id", api.cases.caseTrigger)
+	g.DELETE("/api/case-triggers/:id", api.cases.caseTrigger)
 	g.GET("/api/webhooks", api.webhooks.webhooks)
 	g.POST("/api/webhooks", api.webhooks.webhooks)
 	g.GET("/api/webhooks/:id", api.webhooks.webhook)

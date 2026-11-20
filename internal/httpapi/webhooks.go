@@ -28,7 +28,10 @@ import (
 // webhooksHandlers owns inbound webhooks: management under /api/webhooks and
 // the unauthenticated ingress under /api/hooks/{id}/{secret}, which checks
 // its own URL secret, method, source address and optional HMAC signature.
-type webhooksHandlers struct{ *deps }
+type webhooksHandlers struct {
+	*deps
+	cases *casesHandlers
+}
 
 const webhookIngressPrefix = "/api/hooks/"
 
@@ -395,6 +398,12 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 
 	fingerprint := domain.WebhookFingerprint(plain, w.DedupFields)
 	delivery.Fingerprint = fingerprint
+	alert := domain.Alert{
+		ID: newAlertID(now), ProjectID: w.ProjectID, WebhookID: w.ID, Source: w.Name,
+		Title: domain.WebhookTitle(w, plain), Severity: domain.WebhookSeverity(w, plain),
+		Fingerprint: fingerprint, Payload: domain.RawJSON(trigger), ReceivedAt: now,
+	}
+	delivery.AlertID = alert.ID
 	if fingerprint != "" {
 		claim, err := h.repo.ClaimWebhookFingerprint(w.ID, fingerprint, time.Duration(w.DedupWindowSeconds)*time.Second, now)
 		if err != nil {
@@ -404,33 +413,78 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 			return
 		}
 		if !claim.Claimed {
-			delivery.Status, delivery.HTTPStatus, delivery.RunID = domain.WebhookDeliveryDeduplicated, http.StatusOK, claim.RunID
+			outcome, err := h.cases.recordAlert(w, alert, &claim)
+			if err != nil {
+				log.Printf("webhook %s: record duplicate alert: %v", w.ID, err)
+			}
+			caseID := ""
+			if outcome.Case != nil {
+				caseID = outcome.Case.ID
+			}
+			delivery.Status, delivery.HTTPStatus, delivery.RunID, delivery.CaseID = domain.WebhookDeliveryDeduplicated, http.StatusOK, claim.RunID, caseID
 			delivery.Message = fmt.Sprintf("duplicate alert #%d within the dedup window", claim.Hits)
 			h.recordDelivery(delivery)
 			if claim.RunID != "" {
 				h.engine.AppendRunEvent(claim.RunID, "webhook.duplicate", fmt.Sprintf("Webhook「%s」收到重复告警（第 %d 次），未启动新运行", w.Name, claim.Hits))
 			}
-			c.JSON(http.StatusOK, gin.H{"status": domain.WebhookDeliveryDeduplicated, "runId": claim.RunID, "hits": claim.Hits})
+			c.JSON(http.StatusOK, gin.H{"status": domain.WebhookDeliveryDeduplicated, "runId": claim.RunID, "hits": claim.Hits, "alertId": alert.ID, "caseId": caseID})
 			return
 		}
 	}
-	run, err := h.startWebhookRun(w, domain.WebhookTitle(w, plain), trigger)
+	outcome, err := h.cases.recordAlert(w, alert, nil)
 	if err != nil {
 		if fingerprint != "" {
 			_ = h.repo.ReleaseWebhookFingerprint(w.ID, fingerprint)
 		}
+		delivery.Status, delivery.HTTPStatus, delivery.Message = domain.WebhookDeliveryFailed, http.StatusInternalServerError, "store alert: "+err.Error()
+		h.recordDelivery(delivery)
+		respond(c, err)
+		return
+	}
+	caseID := ""
+	if outcome.Case != nil {
+		caseID = outcome.Case.ID
+		delivery.CaseID = caseID
+		if fingerprint != "" {
+			// Keep the fingerprint on the case even if the run fails below, so
+			// later duplicates join this case instead of opening another.
+			_ = h.repo.SetWebhookFingerprintCase(w.ID, fingerprint, caseID)
+		}
+	}
+	run, err := h.startWebhookRun(w, alert.Title, trigger, caseID)
+	if err != nil {
+		if fingerprint != "" && caseID == "" {
+			_ = h.repo.ReleaseWebhookFingerprint(w.ID, fingerprint)
+		}
+		if outcome.Case != nil {
+			_ = h.repo.AppendCaseEvents(caseID, caseEvent(domain.CaseEventUpdated, fmt.Sprintf("Webhook「%s」的处置流程未能启动：%v", w.Name, err), domain.Actor{Kind: domain.ActorSystem}, nil, time.Now().UTC()))
+		}
 		delivery.Status, delivery.HTTPStatus, delivery.Message = domain.WebhookDeliveryFailed, http.StatusServiceUnavailable, err.Error()
 		h.recordDelivery(delivery)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "run could not start: " + err.Error()})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "run could not start: " + err.Error(), "alertId": alert.ID, "caseId": caseID})
 		return
 	}
 	if fingerprint != "" {
 		_ = h.repo.SetWebhookFingerprintRun(w.ID, fingerprint, run.ID)
 	}
+	if err := h.repo.SetAlertRun(alert.ID, run.ID); err != nil {
+		log.Printf("webhook %s: link alert %s to run: %v", w.ID, alert.ID, err)
+	}
 	h.engine.AppendRunEvent(run.ID, "webhook.received", fmt.Sprintf("由 Webhook「%s」触发", w.Name))
+	if outcome.Case != nil {
+		_ = h.repo.AppendCaseEvents(caseID, caseEvent(domain.CaseEventRunStarted, fmt.Sprintf("Webhook「%s」启动了运行 %s", w.Name, run.ID), domain.Actor{Kind: domain.ActorSystem}, map[string]any{"runId": run.ID, "workflowId": w.WorkflowID}, time.Now().UTC()))
+		alert.RunID, alert.CaseID = run.ID, caseID
+		h.cases.fireCaseTriggers(*outcome.Case, domain.CaseEventCreated, &alert)
+	}
 	delivery.Status, delivery.HTTPStatus, delivery.RunID = domain.WebhookDeliveryStarted, http.StatusAccepted, run.ID
 	h.recordDelivery(delivery)
-	c.JSON(http.StatusAccepted, gin.H{"status": domain.WebhookDeliveryStarted, "runId": run.ID})
+	c.JSON(http.StatusAccepted, gin.H{"status": domain.WebhookDeliveryStarted, "runId": run.ID, "alertId": alert.ID, "caseId": caseID})
+}
+
+func newAlertID(now time.Time) string {
+	raw := make([]byte, 6)
+	_, _ = rand.Read(raw)
+	return fmt.Sprintf("alert-%d-%s", now.UnixNano(), hex.EncodeToString(raw))
 }
 
 // recordDelivery logs a delivery; a logging failure never changes the
@@ -443,7 +497,7 @@ func (h *webhooksHandlers) recordDelivery(d domain.WebhookDelivery) {
 
 // startWebhookRun starts the webhook's SOP as its creator, binding the
 // project's default repository for generic workflows like a manual run does.
-func (h *webhooksHandlers) startWebhookRun(w domain.Webhook, input string, trigger []byte) (domain.Run, error) {
+func (h *webhooksHandlers) startWebhookRun(w domain.Webhook, input string, trigger []byte, caseID string) (domain.Run, error) {
 	project, ok := h.repo.Project(w.ProjectID)
 	if !ok {
 		return domain.Run{}, errors.New("project no longer exists")
@@ -456,5 +510,5 @@ func (h *webhooksHandlers) startWebhookRun(w domain.Webhook, input string, trigg
 		}
 		repositories = []domain.RepositoryContext{repositoryRunContext(repoDef)}
 	}
-	return h.engine.StartWithTrigger(w.WorkflowID, input, trigger, repositories, domain.TelemetryContext{ProjectID: w.ProjectID, ResponsibleUserID: w.CreatedBy})
+	return h.engine.StartWithTrigger(w.WorkflowID, input, trigger, repositories, domain.TelemetryContext{ProjectID: w.ProjectID, ResponsibleUserID: w.CreatedBy, CaseID: caseID})
 }

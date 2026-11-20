@@ -15,7 +15,7 @@ for (const name of ['webhookFormBody', 'webhookURL', 'webhookCurlExample', 'webh
 const plain = v => JSON.parse(JSON.stringify(v));
 
 assert.deepEqual(plain(context.webhookFormBody({projectId: 'p', workflowId: 'w', name: ' SIEM ', titleField: ' alert.title ', dedupFields: 'alert.rule, alert.host，alert.rule', dedupMinutes: '30', allowedCidrs: '10.0.0.0/8\n192.0.2.7', signatureHeader: '', signingSecret: '', enabled: true, methods: ['POST', 'GET']})),
-  {projectId: 'p', workflowId: 'w', name: 'SIEM', enabled: true, methods: ['POST', 'GET'], allowedCidrs: ['10.0.0.0/8', '192.0.2.7'], titleField: 'alert.title', dedupFields: ['alert.rule', 'alert.host', 'alert.rule'], signatureHeader: '', dedupWindowSeconds: 1800});
+  {projectId: 'p', workflowId: 'w', name: 'SIEM', enabled: true, methods: ['POST', 'GET'], allowedCidrs: ['10.0.0.0/8', '192.0.2.7'], titleField: 'alert.title', severityField: '', caseMode: '', dedupFields: ['alert.rule', 'alert.host', 'alert.rule'], signatureHeader: '', dedupWindowSeconds: 1800});
 const noDedup = plain(context.webhookFormBody({projectId: 'p', workflowId: 'w', name: 'n', dedupFields: '', dedupMinutes: '30', signingSecret: ' k ', signatureHeader: 'X-Sig', enabled: false}));
 assert.equal(noDedup.dedupWindowSeconds, undefined);
 assert.equal(noDedup.signingSecret, 'k');

@@ -32,6 +32,7 @@ type webhookDedupRow struct {
 	WebhookID   string `gorm:"primaryKey;size:64"`
 	Fingerprint string `gorm:"primaryKey;size:64"`
 	RunID       string `gorm:"size:64"`
+	CaseID      string `gorm:"size:64"`
 	Hits        int
 	FirstSeen   time.Time
 	LastSeen    time.Time
@@ -135,9 +136,10 @@ type DedupClaim struct {
 	// Claimed means no live run owns the fingerprint and the caller should
 	// start one, then record it with SetWebhookFingerprintRun.
 	Claimed bool
-	// RunID and Hits describe the live fingerprint when not claimed.
-	RunID string
-	Hits  int
+	// RunID, CaseID and Hits describe the live fingerprint when not claimed.
+	RunID  string
+	CaseID string
+	Hits   int
 }
 
 // ClaimWebhookFingerprint atomically decides whether an alert starts a run.
@@ -164,9 +166,9 @@ func (r *WebhooksRepo) ClaimWebhookFingerprint(webhookID, fingerprint string, wi
 		if !row.ExpiresAt.After(now) {
 			claim = DedupClaim{Claimed: true, Hits: 1}
 			return tx.Model(&webhookDedupRow{}).Where("webhook_id = ? AND fingerprint = ?", webhookID, fingerprint).
-				Updates(map[string]any{"run_id": "", "hits": 1, "first_seen": now, "last_seen": now, "expires_at": now.Add(window)}).Error
+				Updates(map[string]any{"run_id": "", "case_id": "", "hits": 1, "first_seen": now, "last_seen": now, "expires_at": now.Add(window)}).Error
 		}
-		claim = DedupClaim{RunID: row.RunID, Hits: row.Hits + 1}
+		claim = DedupClaim{RunID: row.RunID, CaseID: row.CaseID, Hits: row.Hits + 1}
 		return tx.Model(&webhookDedupRow{}).Where("webhook_id = ? AND fingerprint = ?", webhookID, fingerprint).
 			Updates(map[string]any{"hits": row.Hits + 1, "last_seen": now}).Error
 	})
@@ -178,9 +180,16 @@ func (r *WebhooksRepo) SetWebhookFingerprintRun(webhookID, fingerprint, runID st
 	return r.DB.Model(&webhookDedupRow{}).Where("webhook_id = ? AND fingerprint = ?", webhookID, fingerprint).Update("run_id", runID).Error
 }
 
-// ReleaseWebhookFingerprint frees a claim whose run failed to start.
+// SetWebhookFingerprintCase records the case a claimed fingerprint opened,
+// so later duplicates join it.
+func (r *WebhooksRepo) SetWebhookFingerprintCase(webhookID, fingerprint, caseID string) error {
+	return r.DB.Model(&webhookDedupRow{}).Where("webhook_id = ? AND fingerprint = ?", webhookID, fingerprint).Update("case_id", caseID).Error
+}
+
+// ReleaseWebhookFingerprint frees a claim that neither started a run nor
+// opened a case, so the next alert retries.
 func (r *WebhooksRepo) ReleaseWebhookFingerprint(webhookID, fingerprint string) error {
-	return r.DB.Where("webhook_id = ? AND fingerprint = ? AND run_id = ?", webhookID, fingerprint, "").Delete(&webhookDedupRow{}).Error
+	return r.DB.Where("webhook_id = ? AND fingerprint = ? AND run_id = ? AND (case_id = ? OR case_id IS NULL)", webhookID, fingerprint, "", "").Delete(&webhookDedupRow{}).Error
 }
 
 // PurgeExpiredWebhookFingerprints deletes fingerprints whose window ended.

@@ -2645,8 +2645,8 @@ func TestCodexStyleLeftMiniRailLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	appJs := string(appJsBytes)
-	if !strings.Contains(appJs, "const noSidebarViews = ['issues', 'approvals', 'observability'];") {
-		t.Fatal("app.js must hide the sidebar on the rail-only pages: 需求列表, 待我确认, 统计")
+	if !strings.Contains(appJs, "const noSidebarViews = ['issues', 'approvals', 'cases', 'observability'];") {
+		t.Fatal("app.js must hide the sidebar on the rail-only pages: 需求列表, 待我确认, 告警与案件, 统计")
 	}
 	managed := appJs[strings.Index(appJs, "const settingsManagementViews="):]
 	managed = managed[:strings.Index(managed, "\n")]

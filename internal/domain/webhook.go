@@ -39,7 +39,14 @@ type Webhook struct {
 	// DedupFields are dot paths whose values form the alert fingerprint; an
 	// alert with the fingerprint of one seen within DedupWindowSeconds does
 	// not start a new run. Empty disables deduplication.
-	DedupFields        []string   `json:"dedupFields,omitempty"`
+	DedupFields []string `json:"dedupFields,omitempty"`
+	// SeverityField is a dot path read as the alert severity (normalized to
+	// low/medium/high/critical; missing reads as medium).
+	SeverityField string `json:"severityField,omitempty"`
+	// CaseMode decides whether alerts open cases: "" keeps them as alerts
+	// only, per_fingerprint opens one case per new fingerprint (duplicates
+	// join it), per_alert opens a case for every alert.
+	CaseMode           string     `json:"caseMode,omitempty"`
 	DedupWindowSeconds int        `json:"dedupWindowSeconds,omitempty"`
 	CreatedBy          int64      `json:"createdBy,omitempty"`
 	CreatedAt          time.Time  `json:"createdAt"`
@@ -63,9 +70,31 @@ type WebhookDelivery struct {
 	Status      string    `json:"status"` // started, deduplicated, rejected, failed
 	HTTPStatus  int       `json:"httpStatus"`
 	RunID       string    `json:"runId,omitempty"`
+	AlertID     string    `json:"alertId,omitempty"`
+	CaseID      string    `json:"caseId,omitempty"`
 	Fingerprint string    `json:"fingerprint,omitempty"`
 	Message     string    `json:"message,omitempty"`
 	SourceIP    string    `json:"sourceIp,omitempty"`
+}
+
+// Webhook case modes.
+const (
+	WebhookCaseNone           = "none"
+	WebhookCasePerFingerprint = "per_fingerprint"
+	WebhookCasePerAlert       = "per_alert"
+)
+
+// OpensCases reports whether alerts from w open cases.
+func (w Webhook) OpensCases() bool {
+	return w.CaseMode == WebhookCasePerFingerprint || w.CaseMode == WebhookCasePerAlert
+}
+
+// WebhookSeverity reads and normalizes the alert severity.
+func WebhookSeverity(w Webhook, payload any) string {
+	if w.SeverityField == "" {
+		return SeverityMedium
+	}
+	return NormalizeSeverity(LookupJSONPath(payload, w.SeverityField))
 }
 
 // Webhook delivery statuses.
@@ -89,6 +118,8 @@ func (w *Webhook) Normalize() {
 	w.WorkflowID = strings.TrimSpace(w.WorkflowID)
 	w.SignatureHeader = strings.TrimSpace(w.SignatureHeader)
 	w.TitleField = strings.TrimSpace(w.TitleField)
+	w.SeverityField = strings.TrimSpace(w.SeverityField)
+	w.CaseMode = strings.TrimSpace(w.CaseMode)
 	methods := []string{}
 	for _, m := range w.Methods {
 		if m = strings.ToUpper(strings.TrimSpace(m)); m != "" && !contains(methods, m) {
@@ -133,8 +164,17 @@ func (w Webhook) Validate() error {
 	if w.SignatureHeader != "" && http.CanonicalHeaderKey(w.SignatureHeader) == "" {
 		return fmt.Errorf("invalid signature header")
 	}
-	if len(w.TitleField) > WebhookMaxPathLength {
-		return fmt.Errorf("titleField is too long")
+	if len(w.TitleField) > WebhookMaxPathLength || len(w.SeverityField) > WebhookMaxPathLength {
+		return fmt.Errorf("titleField and severityField must be at most %d characters", WebhookMaxPathLength)
+	}
+	switch w.CaseMode {
+	case "", WebhookCaseNone, WebhookCasePerAlert:
+	case WebhookCasePerFingerprint:
+		if len(w.DedupFields) == 0 {
+			return fmt.Errorf("caseMode per_fingerprint needs dedupFields")
+		}
+	default:
+		return fmt.Errorf("caseMode must be none, per_fingerprint or per_alert")
 	}
 	if len(w.DedupFields) > WebhookMaxFields {
 		return fmt.Errorf("at most %d dedup fields", WebhookMaxFields)

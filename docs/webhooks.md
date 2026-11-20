@@ -73,8 +73,9 @@ The last 200 deliveries per webhook are kept.
 ## Not covered yet
 
 - No rate limiting per webhook; a flood of distinct alerts starts one run each.
-- Duplicates are counted on the first run but not merged into a case; cases
-  arrive in phase 3.
+- Duplicates join the case their fingerprint opened only with
+  `caseMode: per_fingerprint`; otherwise they are counted on the first run.
+  See [alerts and cases](cases.md).
 - Expired fingerprints are cleared lazily when the same fingerprint returns;
   `PurgeExpiredWebhookFingerprints` exists but nothing schedules it yet.
 

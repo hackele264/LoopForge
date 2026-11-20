@@ -10,7 +10,7 @@ function webhookFormBody(form){
   const body={
     projectId:form.projectId,workflowId:form.workflowId,name:String(form.name||'').trim(),enabled:form.enabled!==false,
     methods:(form.methods||['POST']).filter(Boolean),allowedCidrs:list(form.allowedCidrs),
-    titleField:String(form.titleField||'').trim(),dedupFields:fields,
+    titleField:String(form.titleField||'').trim(),severityField:String(form.severityField||'').trim(),caseMode:form.caseMode||'',dedupFields:fields,
     signatureHeader:String(form.signatureHeader||'').trim(),
   };
   if(fields.length&&Number.isFinite(minutes)&&minutes>0)body.dedupWindowSeconds=Math.round(minutes*60);
@@ -53,7 +53,11 @@ function webhookFormHTML(w){
   const methods=v.methods?.length?v.methods:['POST'];
   return `<form class="webhook-form" data-webhook-form="${escapeHTML(w?.id||'')}">
     <label class="field"><span>名称</span><input class="input" name="name" maxlength="120" required value="${escapeHTML(v.name||'')}" placeholder="例如：SIEM 高危告警"></label>
-    <label class="field"><span>标题字段（作为运行输入）</span><input class="input mono" name="titleField" value="${escapeHTML(v.titleField||'')}" placeholder="alert.title"></label>
+    <div class="webhook-row">
+      <label class="field"><span>标题字段（作为运行输入）</span><input class="input mono" name="titleField" value="${escapeHTML(v.titleField||'')}" placeholder="alert.title"></label>
+      <label class="field"><span>严重度字段</span><input class="input mono" name="severityField" value="${escapeHTML(v.severityField||'')}" placeholder="alert.severity"></label>
+    </div>
+    <label class="field"><span>建案方式</span><select class="select" name="caseMode"><option value="" ${!v.caseMode||v.caseMode==='none'?'selected':''}>只记录告警，不建案</option><option value="per_fingerprint" ${v.caseMode==='per_fingerprint'?'selected':''}>每个新指纹建一个案件，重复告警并入（需要去重字段）</option><option value="per_alert" ${v.caseMode==='per_alert'?'selected':''}>每条告警建一个案件</option></select></label>
     <div class="webhook-row">
       <label class="field"><span>去重字段（逗号分隔，留空不去重）</span><input class="input mono" name="dedupFields" value="${escapeHTML((v.dedupFields||[]).join(', '))}" placeholder="alert.rule, alert.host"></label>
       <label class="field webhook-narrow"><span>去重窗口（分钟）</span><input class="input" name="dedupMinutes" type="number" min="1" max="10080" value="${Math.round((v.dedupWindowSeconds||3600)/60)}"></label>
@@ -83,6 +87,7 @@ function webhookCardHTML(w){
   const editing=webhookState.editing===w.id,dl=webhookState.deliveries[w.id];
   const facts=[
     w.dedupFields?.length?`去重：${w.dedupFields.join(' + ')} · ${webhookWindowText(w.dedupWindowSeconds)}`:'不去重',
+    w.caseMode==='per_fingerprint'?'按指纹建案':w.caseMode==='per_alert'?'每条告警建案':'',
     w.allowedCidrs?.length?`白名单 ${w.allowedCidrs.length} 条`:'不限来源',
     w.signatureHeader?`签名：${w.signatureHeader}`:'',
     w.lastTriggeredAt?`最近触发 ${new Date(w.lastTriggeredAt).toLocaleString()}`:'尚未触发',
@@ -113,7 +118,7 @@ function renderWorkflowWebhooks(){
 
 function readWebhookForm(form){
   const wf=state.workflow,f=form.elements;
-  return webhookFormBody({projectId:wf.projectId,workflowId:wf.id,name:f.name.value,titleField:f.titleField.value,dedupFields:f.dedupFields.value,dedupMinutes:f.dedupMinutes.value,allowedCidrs:f.allowedCidrs.value,signatureHeader:f.signatureHeader.value,signingSecret:f.signingSecret.value,enabled:f.enabled.checked,methods:[...form.querySelectorAll('[name=method]:checked')].map(b=>b.value)});
+  return webhookFormBody({projectId:wf.projectId,workflowId:wf.id,name:f.name.value,titleField:f.titleField.value,severityField:f.severityField.value,caseMode:f.caseMode.value,dedupFields:f.dedupFields.value,dedupMinutes:f.dedupMinutes.value,allowedCidrs:f.allowedCidrs.value,signatureHeader:f.signatureHeader.value,signingSecret:f.signingSecret.value,enabled:f.enabled.checked,methods:[...form.querySelectorAll('[name=method]:checked')].map(b=>b.value)});
 }
 
 function bindWorkflowWebhooks(host){

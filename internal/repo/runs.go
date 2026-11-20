@@ -66,7 +66,7 @@ func runFromRow(row runRow) domain.Run {
 func runRowValues(run domain.Run) map[string]any {
 	return map[string]any{
 		"id": run.ID, "kind": run.Kind, "workflow_id": run.WorkflowID, "status": run.Status, "revision": run.Revision,
-		"input": run.Input, "trigger_payload": triggerPayloadValue(run.TriggerPayload), "human_context": run.HumanContext,
+		"input": run.Input, "trigger_payload": triggerPayloadValue(run.TriggerPayload), "case_id": strings.TrimSpace(run.ExecutionContext.CaseID), "human_context": run.HumanContext,
 		"quota_project_id": strings.TrimSpace(run.ExecutionContext.ProjectID), "quota_parent_run_id": strings.TrimSpace(run.ExecutionContext.ParentRunID),
 		"quota_exempt": run.ConcurrencyExempt, "admission_state": run.AdmissionState, "queue_entered_at": timePtr(run.QueueEnteredAt),
 		"quota_bucket":     runAdmissionBucketKey(run),

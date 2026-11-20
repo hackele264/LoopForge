@@ -2098,6 +2098,480 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/alerts:
+    get:
+      tags: [Cases]
+      operationId: listAlerts
+      description: Alerts newest first, without payloads. Readable by project members of any role.
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: caseId
+          in: query
+          schema:
+            type: string
+        - name: uncased
+          in: query
+          schema:
+            type: string
+            enum: ["true"]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Alert"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/alerts/{alertId}:
+    parameters:
+      - name: alertId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Cases]
+      operationId: getAlert
+      responses:
+        "200":
+          description: Alert with its payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alert"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/alerts/{alertId}/escalate:
+    parameters:
+      - name: alertId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: escalateAlert
+      description: Opens a case from the alert, or attaches it to caseId. 409 when the alert already belongs to a case.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                caseId:
+                  type: string
+                title:
+                  type: string
+                severity:
+                  $ref: "#/components/schemas/Severity"
+      responses:
+        "200":
+          description: Alert attached to the case
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "201":
+          description: Case opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Alert already in a case
+  /api/cases:
+    get:
+      tags: [Cases]
+      operationId: listCases
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, new, investigating, pending_response, closed]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Cases, most recently updated first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Case"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+    post:
+      tags: [Cases]
+      operationId: createCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, title]
+              properties:
+                projectId:
+                  type: string
+                title:
+                  type: string
+                  maxLength: 300
+                description:
+                  type: string
+                severity:
+                  $ref: "#/components/schemas/Severity"
+                tags:
+                  type: array
+                  items:
+                    type: string
+                alertIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Case opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+        "409":
+          description: An alert already belongs to a case
+  /api/cases/{caseId}:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Cases]
+      operationId: getCase
+      responses:
+        "200":
+          description: Case with alerts, IOCs, timeline and linked runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  case:
+                    $ref: "#/components/schemas/Case"
+                  alerts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Alert"
+                  iocs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CaseIOC"
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CaseEvent"
+                  runs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        workflowId:
+                          type: string
+                        status:
+                          type: string
+                        createdAt:
+                          type: string
+                          format: date-time
+                        updatedAt:
+                          type: string
+                          format: date-time
+        "403":
+          description: Not a project member
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Cases]
+      operationId: updateCase
+      description: Partial update; omitted fields stay unchanged. Each change is recorded on the timeline and may start case triggers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                severity:
+                  $ref: "#/components/schemas/Severity"
+                status:
+                  type: string
+                  enum: [new, investigating, pending_response, closed]
+                resolution:
+                  type: string
+                  enum: [false_positive, resolved, duplicate]
+                  description: Required when closing.
+                assigneeId:
+                  type: integer
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Updated case
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/cases/{caseId}/comments:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: commentCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                  maxLength: 10000
+      responses:
+        "201":
+          description: Comment event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseEvent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/cases/{caseId}/iocs:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: addCaseIOC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, value]
+              properties:
+                type:
+                  type: string
+                  enum: [ipv4, domain, url, email, md5, sha1, sha256, cve]
+                value:
+                  type: string
+      responses:
+        "201":
+          description: Indicator added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseIOC"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/cases/{caseId}/runs:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: runCasePlaybook
+      description: Starts workflowId as the calling user, linked to the case; the trigger payload holds the case, its alerts and IOCs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflowId]
+              properties:
+                workflowId:
+                  type: string
+      responses:
+        "201":
+          description: Run started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/case-triggers:
+    get:
+      tags: [Cases]
+      operationId: listCaseTriggers
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Triggers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaseTrigger"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+    post:
+      tags: [Cases]
+      operationId: createCaseTrigger
+      description: Runs started by the trigger execute as the signed-in creator.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaseTrigger"
+      responses:
+        "201":
+          description: Trigger created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseTrigger"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/case-triggers/{triggerId}:
+    parameters:
+      - name: triggerId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [Cases]
+      operationId: updateCaseTrigger
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaseTrigger"
+      responses:
+        "200":
+          description: Trigger updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseTrigger"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Cases]
+      operationId: deleteCaseTrigger
+      responses:
+        "200":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/webhooks:
     get:
       tags: [Webhooks]
@@ -5167,6 +5641,143 @@ components:
         waitingPolicy: {type: string, enum: [actionable, event], description: Waiting reminders cancel if resolved before sending by default; event records are sent even after resolution.}
         contentMode: {type: string, enum: [template, ai]}
         aiInstruction: {type: string, maxLength: 4000, description: Writing instructions for the independent SOP report or the existing scheduled task model call}
+    Severity:
+      type: string
+      enum: [low, medium, high, critical]
+    Alert:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        webhookId:
+          type: string
+        source:
+          type: string
+        title:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        fingerprint:
+          type: string
+        caseId:
+          type: string
+        runId:
+          type: string
+        duplicate:
+          type: boolean
+        payload:
+          type: object
+          additionalProperties: true
+        receivedAt:
+          type: string
+          format: date-time
+    Case:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        number:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        status:
+          type: string
+          enum: [new, investigating, pending_response, closed]
+        resolution:
+          type: string
+          enum: [false_positive, resolved, duplicate]
+        assigneeId:
+          type: integer
+        tags:
+          type: array
+          items:
+            type: string
+        alertCount:
+          type: integer
+        createdBy:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+    CaseIOC:
+      type: object
+      properties:
+        caseId:
+          type: string
+        type:
+          type: string
+          enum: [ipv4, domain, url, email, md5, sha1, sha256, cve]
+        value:
+          type: string
+        alertId:
+          type: string
+        firstSeen:
+          type: string
+          format: date-time
+    CaseEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        caseId:
+          type: string
+        type:
+          type: string
+        message:
+          type: string
+        actorUserId:
+          type: integer
+        actorKind:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    CaseTrigger:
+      type: object
+      required: [projectId, workflowId, name, events]
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        workflowId:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        events:
+          type: array
+          items:
+            type: string
+            enum: [case.created, case.alert_added, case.status_changed, case.severity_changed, case.escalated]
+        minSeverity:
+          $ref: "#/components/schemas/Severity"
+        createdBy:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     WebhookInput:
       type: object
       required: [projectId, workflowId, name]
@@ -5201,6 +5812,13 @@ components:
         titleField:
           type: string
           description: Dot path into the payload used as the run input, for example alert.title.
+        severityField:
+          type: string
+          description: Dot path read as the alert severity, normalized to low/medium/high/critical.
+        caseMode:
+          type: string
+          enum: [none, per_fingerprint, per_alert]
+          description: per_fingerprint opens one case per new fingerprint and adds duplicates to it (needs dedupFields); per_alert opens a case for every alert.
         dedupFields:
           type: array
           maxItems: 16
