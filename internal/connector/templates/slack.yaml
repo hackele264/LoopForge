@@ -1,0 +1,282 @@
+# Written for LoopForge from Slack's public API documentation.
+id: slack
+title: Slack
+vendor: Slack
+description: 通过 Slack Web API 发送和更新消息、查找用户、建频道拉人、读取频道消息、添加表情回应。使用 Slack App 的 Bot Token（xoxb-），按动作授予相应 scope，并把机器人加入目标频道。
+docs: https://docs.slack.dev/reference/methods
+baseUrl: https://slack.com
+auth:
+  type: bearer
+  secret: bot_token
+secrets:
+  - name: bot_token
+    label: Bot Token
+    description: xoxb- 开头的 Bot User OAuth Token
+    required: true
+testAction: auth_test
+actions:
+  # Docs: https://docs.slack.dev/reference/methods/auth.test
+  - id: auth_test
+    title: 验证 Token
+    description: 返回 Token 所属的工作区和机器人身份。
+    category: enrichment
+    request:
+      method: POST
+      path: /api/auth.test
+    failIf: response.body.ok == false
+    output:
+      team: response.body.team
+      teamId: response.body.team_id
+      user: response.body.user
+      userId: response.body.user_id
+      botId: response.body.bot_id
+      url: response.body.url
+
+  # Docs: https://docs.slack.dev/reference/methods/chat.postMessage
+  - id: post_message
+    title: 发送消息
+    description: 向频道发送消息（scope chat:write）。填写父消息 ts 则作为线程回复；提供 blocks 时文本作为通知回退文本。
+    category: utility
+    inputs:
+      - name: channel
+        label: 频道 ID
+        type: string
+        required: true
+        description: 频道、私信或群聊 ID，例如 C0123456789
+      - name: text
+        label: 文本
+        type: string
+        required: true
+      - name: thread_ts
+        label: 线程父消息 ts
+        type: string
+      - name: blocks
+        label: Block Kit blocks
+        type: list
+        description: JSON 数组，可选
+    request:
+      method: POST
+      path: /api/chat.postMessage
+      body:
+        channel: "{{ inputs.channel }}"
+        text: "{{ inputs.text }}"
+        thread_ts: "{{ inputs.thread_ts }}"
+        blocks: "{{ inputs.blocks }}"
+    failIf: response.body.ok == false
+    output:
+      channel: response.body.channel
+      ts: response.body.ts
+
+  # Docs: https://docs.slack.dev/reference/methods/chat.update
+  - id: update_message
+    title: 更新消息
+    description: 修改机器人已发送的消息（scope chat:write）。只给文本时原有 blocks 会被移除。
+    category: utility
+    inputs:
+      - name: channel
+        label: 频道 ID
+        type: string
+        required: true
+      - name: ts
+        label: 消息 ts
+        type: string
+        required: true
+      - name: text
+        label: 文本
+        type: string
+        required: true
+      - name: blocks
+        label: Block Kit blocks
+        type: list
+    request:
+      method: POST
+      path: /api/chat.update
+      body:
+        channel: "{{ inputs.channel }}"
+        ts: "{{ inputs.ts }}"
+        text: "{{ inputs.text }}"
+        blocks: "{{ inputs.blocks }}"
+    failIf: response.body.ok == false
+    output:
+      channel: response.body.channel
+      ts: response.body.ts
+
+  # Docs: https://docs.slack.dev/reference/methods/users.lookupByEmail
+  - id: lookup_user_by_email
+    title: 按邮箱查找用户
+    description: 按邮箱找到工作区成员（scope users:read.email）。已停用的用户返回 users_not_found。
+    category: enrichment
+    inputs:
+      - name: email
+        label: 邮箱
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/users.lookupByEmail
+      query:
+        email: "{{ inputs.email }}"
+    failIf: response.body.ok == false
+    output:
+      id: response.body.user.id
+      name: response.body.user.name
+      realName: response.body.user.real_name
+      displayName: response.body.user.profile.display_name
+      deleted: response.body.user.deleted
+      isAdmin: response.body.user.is_admin
+      isBot: response.body.user.is_bot
+      tz: response.body.user.tz
+
+  # Docs: https://docs.slack.dev/reference/methods/conversations.list
+  - id: list_conversations
+    title: 列出频道
+    description: 列出工作区频道的第一页（scope channels:read，私有频道需 groups:read）。
+    category: enrichment
+    inputs:
+      - name: types
+        label: 类型
+        type: string
+        default: public_channel
+        description: 逗号分隔：public_channel、private_channel、mpim、im
+      - name: exclude_archived
+        label: 排除已归档
+        type: boolean
+        default: true
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 200
+    request:
+      method: GET
+      path: /api/conversations.list
+      query:
+        types: "{{ inputs.types }}"
+        exclude_archived: "{{ inputs.exclude_archived }}"
+        limit: "{{ inputs.limit }}"
+    failIf: response.body.ok == false
+    output:
+      items: response.body.channels
+      count: len(response.body.channels)
+      nextCursor: response.body.response_metadata.next_cursor
+
+  # Docs: https://docs.slack.dev/reference/methods/conversations.create
+  - id: create_conversation
+    title: 创建频道
+    description: 创建公开或私有频道（scope channels:manage，私有频道需 groups:write）。名称只能包含小写字母、数字、- 和 _，不超过 80 个字符。
+    category: utility
+    inputs:
+      - name: name
+        label: 频道名称
+        type: string
+        required: true
+        description: 例如 inc-20261120-phishing
+      - name: is_private
+        label: 私有频道
+        type: boolean
+        default: false
+    request:
+      method: POST
+      path: /api/conversations.create
+      body:
+        name: "{{ inputs.name }}"
+        is_private: "{{ inputs.is_private }}"
+    failIf: response.body.ok == false
+    output:
+      id: response.body.channel.id
+      name: response.body.channel.name
+
+  # Docs: https://docs.slack.dev/reference/methods/conversations.invite
+  - id: invite_to_conversation
+    title: 邀请成员入频道
+    description: 把用户加入频道（scope channels:manage 或 channels:write.invites）。不勾选"忽略无效用户"时任一用户失败则全部不邀请。
+    category: utility
+    inputs:
+      - name: channel
+        label: 频道 ID
+        type: string
+        required: true
+      - name: users
+        label: 用户 ID
+        type: string
+        required: true
+        description: 逗号分隔的用户 ID，最多 1000 个
+      - name: force
+        label: 忽略无效用户
+        type: boolean
+        default: false
+    request:
+      method: POST
+      path: /api/conversations.invite
+      body:
+        channel: "{{ inputs.channel }}"
+        users: "{{ inputs.users }}"
+        force: "{{ inputs.force }}"
+    failIf: response.body.ok == false
+    output:
+      id: response.body.channel.id
+      name: response.body.channel.name
+
+  # Docs: https://docs.slack.dev/reference/methods/conversations.history
+  - id: conversation_history
+    title: 读取频道消息
+    description: 读取频道最近的消息（scope channels:history，私有频道需 groups:history）。时间为 Unix 秒，可带小数。
+    category: enrichment
+    inputs:
+      - name: channel
+        label: 频道 ID
+        type: string
+        required: true
+      - name: oldest
+        label: 起始时间
+        type: string
+        description: 只返回此时间之后的消息
+      - name: latest
+        label: 结束时间
+        type: string
+        description: 只返回此时间之前的消息
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 100
+    request:
+      method: GET
+      path: /api/conversations.history
+      query:
+        channel: "{{ inputs.channel }}"
+        oldest: "{{ inputs.oldest }}"
+        latest: "{{ inputs.latest }}"
+        limit: "{{ inputs.limit }}"
+    failIf: response.body.ok == false
+    output:
+      items: response.body.messages
+      count: len(response.body.messages)
+      hasMore: response.body.has_more
+      nextCursor: response.body.response_metadata.next_cursor
+
+  # Docs: https://docs.slack.dev/reference/methods/reactions.add
+  - id: add_reaction
+    title: 添加表情回应
+    description: 给消息添加表情回应（scope reactions:write），例如标记已处理。
+    category: utility
+    inputs:
+      - name: channel
+        label: 频道 ID
+        type: string
+        required: true
+      - name: timestamp
+        label: 消息 ts
+        type: string
+        required: true
+      - name: name
+        label: 表情名称
+        type: string
+        required: true
+        description: 不带冒号，例如 white_check_mark
+    request:
+      method: POST
+      path: /api/reactions.add
+      body:
+        channel: "{{ inputs.channel }}"
+        timestamp: "{{ inputs.timestamp }}"
+        name: "{{ inputs.name }}"
+    failIf: response.body.ok == false

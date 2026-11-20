@@ -1,0 +1,241 @@
+# Written for LoopForge from Atlassian's public API documentation.
+id: jira
+title: Jira Cloud
+vendor: Atlassian
+description: 通过 Jira Cloud REST API v3 创建和查询工单、添加评论、流转状态和分配处理人。服务地址填你的站点，例如 https://your-domain.atlassian.net；认证用账号邮箱 + API Token（id.atlassian.com → 安全 → API Token）。
+docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/
+auth:
+  type: basic
+  username: email
+  password: api_token
+secrets:
+  - name: email
+    label: 账号邮箱
+    description: 创建 API Token 的 Atlassian 账号邮箱
+    required: true
+  - name: api_token
+    label: API Token
+    required: true
+testAction: get_myself
+actions:
+  # Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/#api-rest-api-3-myself-get
+  - id: get_myself
+    title: 当前用户
+    description: 返回 API Token 所属账号，可用于测试连接或取得 accountId。
+    category: enrichment
+    request:
+      method: GET
+      path: /rest/api/3/myself
+    output:
+      accountId: response.body.accountId
+      displayName: response.body.displayName
+      emailAddress: response.body.emailAddress
+      active: response.body.active
+
+  # Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-post
+  - id: create_issue
+    title: 创建工单
+    description: 在项目中创建工单。描述按纯文本写入一个段落（Atlassian Document Format）。
+    category: utility
+    inputs:
+      - name: project_key
+        label: 项目 Key
+        type: string
+        required: true
+        description: 例如 SEC
+      - name: issue_type
+        label: 工单类型
+        type: string
+        default: Task
+        description: 项目中存在的工单类型名称，例如 Task、Bug、Incident
+      - name: summary
+        label: 标题
+        type: string
+        required: true
+      - name: description
+        label: 描述
+        type: string
+        required: true
+        description: 纯文本
+      - name: labels
+        label: 标签
+        type: list
+        default: []
+        description: 标签不能包含空格
+    request:
+      method: POST
+      path: /rest/api/3/issue
+      body:
+        fields:
+          project:
+            key: "{{ inputs.project_key }}"
+          issuetype:
+            name: "{{ inputs.issue_type }}"
+          summary: "{{ inputs.summary }}"
+          labels: "{{ inputs.labels }}"
+          description:
+            type: doc
+            version: 1
+            content:
+              - type: paragraph
+                content:
+                  - type: text
+                    text: "{{ inputs.description }}"
+    output:
+      id: response.body.id
+      key: response.body.key
+      self: response.body.self
+
+  # Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-get
+  - id: get_issue
+    title: 查询工单
+    category: enrichment
+    inputs:
+      - name: issue
+        label: 工单 Key 或 ID
+        type: string
+        required: true
+        description: 例如 SEC-123
+      - name: fields
+        label: 返回字段
+        type: string
+        default: summary,status,assignee,reporter,priority,labels,issuetype,created,updated
+        description: 逗号分隔；*all 返回全部字段
+    request:
+      method: GET
+      path: /rest/api/3/issue/{{ inputs.issue }}
+      query:
+        fields: "{{ inputs.fields }}"
+    output:
+      id: response.body.id
+      key: response.body.key
+      summary: response.body.fields.summary
+      issueStatus: response.body.fields.status.name
+      assignee: response.body.fields.assignee.displayName
+      assigneeAccountId: response.body.fields.assignee.accountId
+      priority: response.body.fields.priority.name
+      labels: response.body.fields.labels
+      fields: response.body.fields
+
+  # Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-get
+  - id: search_issues
+    title: JQL 搜索工单
+    description: 使用增强搜索接口（/search/jql）按 JQL 查询，返回第一页结果。JQL 需要带限定条件（例如 project = SEC）。
+    category: enrichment
+    inputs:
+      - name: jql
+        label: JQL
+        type: string
+        required: true
+        description: 例如 project = SEC AND statusCategory != Done ORDER BY created DESC
+      - name: fields
+        label: 返回字段
+        type: string
+        default: summary,status,assignee,priority,labels,created
+        description: 逗号分隔；默认只返回 id
+      - name: max_results
+        label: 最多返回条数
+        type: number
+        default: 50
+    request:
+      method: GET
+      path: /rest/api/3/search/jql
+      query:
+        jql: "{{ inputs.jql }}"
+        fields: "{{ inputs.fields }}"
+        maxResults: "{{ inputs.max_results }}"
+    output:
+      items: response.body.issues
+      count: len(response.body.issues)
+      isLast: response.body.isLast
+      nextPageToken: response.body.nextPageToken
+
+  # Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/#api-rest-api-3-issue-issueidorkey-comment-post
+  - id: add_comment
+    title: 添加评论
+    description: 以纯文本段落（Atlassian Document Format）添加评论。
+    category: utility
+    inputs:
+      - name: issue
+        label: 工单 Key 或 ID
+        type: string
+        required: true
+      - name: comment
+        label: 评论
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /rest/api/3/issue/{{ inputs.issue }}/comment
+      body:
+        body:
+          type: doc
+          version: 1
+          content:
+            - type: paragraph
+              content:
+                - type: text
+                  text: "{{ inputs.comment }}"
+    output:
+      id: response.body.id
+      created: response.body.created
+
+  # Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-transitions-get
+  - id: list_transitions
+    title: 可用流转
+    description: 列出工单当前可执行的状态流转及其 ID，供"流转工单"使用。
+    category: enrichment
+    inputs:
+      - name: issue
+        label: 工单 Key 或 ID
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /rest/api/3/issue/{{ inputs.issue }}/transitions
+    output:
+      items: response.body.transitions
+      count: len(response.body.transitions)
+
+  # Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-transitions-post
+  - id: transition_issue
+    title: 流转工单
+    description: 按流转 ID 改变工单状态。流转 ID 用"可用流转"查询。
+    category: utility
+    inputs:
+      - name: issue
+        label: 工单 Key 或 ID
+        type: string
+        required: true
+      - name: transition_id
+        label: 流转 ID
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /rest/api/3/issue/{{ inputs.issue }}/transitions
+      body:
+        transition:
+          id: "{{ inputs.transition_id }}"
+    success: [204]
+
+  # Docs: https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-assignee-put
+  - id: assign_issue
+    title: 分配工单
+    description: 把工单分配给指定 accountId；填 -1 分配给项目默认处理人。
+    category: utility
+    inputs:
+      - name: issue
+        label: 工单 Key 或 ID
+        type: string
+        required: true
+      - name: account_id
+        label: 处理人 accountId
+        type: string
+        required: true
+    request:
+      method: PUT
+      path: /rest/api/3/issue/{{ inputs.issue }}/assignee
+      body:
+        accountId: "{{ inputs.account_id }}"
+    success: [204]

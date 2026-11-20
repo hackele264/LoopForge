@@ -1,0 +1,101 @@
+# Written for LoopForge from abuse.ch's public API documentation.
+id: threatfox
+title: ThreatFox
+vendor: abuse.ch
+description: 在 abuse.ch ThreatFox 中查询 IOC（IP:端口、域名、URL、文件哈希）关联的恶意软件家族与威胁类型，或拉取最近提交的 IOC。
+docs: https://threatfox.abuse.ch/api/
+baseUrl: https://threatfox-api.abuse.ch
+auth:
+  type: header
+  name: Auth-Key
+  secret: api_key
+secrets:
+  - name: api_key
+    label: Auth-Key
+    description: 在 abuse.ch 认证平台（auth.abuse.ch）免费申请
+    required: true
+testAction: search_ioc
+testInputs:
+  ioc: 8.8.8.8
+  exact_match: true
+actions:
+  # Docs: https://threatfox.abuse.ch/api/#search-ioc
+  - id: search_ioc
+    title: 搜索 IOC
+    description: 没有结果时 found=false，此时 items 不是列表、count 无意义。
+    category: enrichment
+    inputs:
+      - name: ioc
+        label: IOC
+        type: string
+        required: true
+        description: IP:端口、域名、URL 等
+      - name: exact_match
+        label: 精确匹配
+        type: boolean
+        default: false
+        description: 关闭时为模糊匹配
+    request:
+      method: POST
+      path: /api/v1/
+      body:
+        query: search_ioc
+        search_term: "{{ inputs.ioc }}"
+        exact_match: "{{ inputs.exact_match }}"
+    failIf: response.body.query_status != "ok" && response.body.query_status != "no_result"
+    output:
+      found: response.body.query_status == "ok"
+      queryStatus: response.body.query_status
+      items: response.body.data
+      count: len(response.body.data)
+      malware: response.body.data[0].malware_printable
+      threatType: response.body.data[0].threat_type
+      confidenceLevel: response.body.data[0].confidence_level
+      firstSeen: response.body.data[0].first_seen
+  # Docs: https://threatfox.abuse.ch/api/#search-by-hash
+  - id: search_hash
+    title: 按文件哈希搜索
+    description: 查询与某个恶意样本关联的 IOC。没有结果时 found=false，此时 items 不是列表、count 无意义。
+    category: enrichment
+    inputs:
+      - name: hash
+        label: 文件哈希
+        type: string
+        required: true
+        description: MD5 或 SHA256
+    request:
+      method: POST
+      path: /api/v1/
+      body:
+        query: search_hash
+        hash: "{{ inputs.hash }}"
+    failIf: response.body.query_status != "ok" && response.body.query_status != "no_result"
+    output:
+      found: response.body.query_status == "ok"
+      queryStatus: response.body.query_status
+      items: response.body.data
+      count: len(response.body.data)
+      malware: response.body.data[0].malware_printable
+      threatType: response.body.data[0].threat_type
+  # Docs: https://threatfox.abuse.ch/api/#recent-iocs
+  - id: recent_iocs
+    title: 最近的 IOC
+    description: 按首次发现时间返回最近 1～7 天提交的 IOC。结果可能很大，超过 128 KiB 时只保留 count。
+    category: enrichment
+    inputs:
+      - name: days
+        label: 天数
+        type: number
+        default: 3
+        description: 1～7
+    request:
+      method: POST
+      path: /api/v1/
+      body:
+        query: get_iocs
+        days: "{{ inputs.days }}"
+    timeoutSeconds: 60
+    failIf: response.body.query_status != "ok"
+    output:
+      items: response.body.data
+      count: len(response.body.data)

@@ -1,0 +1,260 @@
+# Written for LoopForge from MISP's public API documentation.
+id: misp
+title: MISP
+vendor: MISP Project
+description: 在自建 MISP 威胁情报平台中搜索属性和事件、查看事件，并新建事件、添加属性和目击记录（sighting）。服务地址填 MISP 地址，例如 https://misp.example.com；自签证书在连接里填证书 SHA-256 指纹。
+docs: https://www.misp-project.org/openapi/
+auth:
+  type: header
+  name: Authorization
+  secret: api_key
+secrets:
+  - name: api_key
+    label: API Key
+    description: MISP 认证密钥（我的资料 → Auth Keys）；只读用途可使用只读密钥
+    required: true
+testAction: get_version
+actions:
+  # Docs: https://www.misp-project.org/openapi/#tag/Servers/operation/getServerVersion
+  - id: get_version
+    title: 获取版本
+    description: 返回 MISP 实例版本及当前密钥的同步、目击权限。
+    category: enrichment
+    request:
+      method: GET
+      path: /servers/getVersion
+    output:
+      version: response.body.version
+      permSync: response.body.perm_sync
+      permSighting: response.body.perm_sighting
+  # Docs: https://www.misp-project.org/openapi/#tag/Attributes/operation/restSearchAttributes
+  - id: search_attributes
+    title: 搜索属性
+    description: 按值、类型、时间等条件搜索属性（restSearch），留空的条件不参与过滤。
+    category: enrichment
+    inputs:
+      - name: value
+        label: 值
+        type: string
+        description: 属性值，例如 IP、域名或哈希；支持 % 通配
+      - name: type
+        label: 属性类型
+        type: string
+        description: 例如 ip-dst、domain、md5、url
+      - name: last
+        label: 最近发布
+        type: string
+        description: 只看最近发布的事件中的属性，例如 7d、12h、30m
+      - name: to_ids
+        label: 仅 IDS 标记
+        type: boolean
+        description: 留空不过滤
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 100
+    request:
+      method: POST
+      path: /attributes/restSearch
+      body:
+        returnFormat: json
+        value: "{{ inputs.value }}"
+        type: "{{ inputs.type }}"
+        last: "{{ inputs.last }}"
+        to_ids: "{{ inputs.to_ids }}"
+        limit: "{{ inputs.limit }}"
+        page: 1
+    timeoutSeconds: 60
+    output:
+      items: response.body.response.Attribute
+      count: len(response.body.response.Attribute)
+      found: len(response.body.response.Attribute) > 0
+  # Docs: https://www.misp-project.org/openapi/#tag/Events/operation/restSearchEvents
+  - id: search_events
+    title: 搜索事件
+    description: 按属性值、类型、标签和时间搜索事件（restSearch），留空的条件不参与过滤。默认只返回事件元数据，避免结果过大。
+    category: enrichment
+    inputs:
+      - name: value
+        label: 属性值
+        type: string
+        description: 包含该属性值的事件；支持 % 通配
+      - name: type
+        label: 属性类型
+        type: string
+      - name: tags
+        label: 标签
+        type: list
+        description: 例如 ["tlp:amber"]
+      - name: last
+        label: 最近发布
+        type: string
+        description: 例如 7d、12h、30m
+      - name: metadata
+        label: 仅元数据
+        type: boolean
+        default: true
+        description: 开启时不返回事件中的属性和对象
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 20
+    request:
+      method: POST
+      path: /events/restSearch
+      body:
+        returnFormat: json
+        value: "{{ inputs.value }}"
+        type: "{{ inputs.type }}"
+        tags: "{{ inputs.tags }}"
+        last: "{{ inputs.last }}"
+        metadata: "{{ inputs.metadata }}"
+        limit: "{{ inputs.limit }}"
+        page: 1
+    timeoutSeconds: 60
+    output:
+      items: response.body.response
+      count: len(response.body.response)
+  # Docs: https://www.misp-project.org/openapi/#tag/Events/operation/getEventById
+  - id: get_event
+    title: 查看事件
+    description: 按事件 ID 或 UUID 返回完整事件（含属性、对象、标签）。
+    category: enrichment
+    inputs:
+      - name: event_id
+        label: 事件 ID
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /events/view/{{ inputs.event_id }}
+    output:
+      event: response.body.Event
+      info: response.body.Event.info
+      uuid: response.body.Event.uuid
+      threatLevelId: response.body.Event.threat_level_id
+      published: response.body.Event.published
+      attributes: response.body.Event.Attribute
+      attributeCount: len(response.body.Event.Attribute)
+      tags: response.body.Event.Tag
+  # Docs: https://www.misp-project.org/openapi/#tag/Events/operation/addEvent
+  - id: add_event
+    title: 新建事件
+    description: 在 MISP 中创建一个未发布的事件。
+    category: utility
+    inputs:
+      - name: info
+        label: 事件描述
+        type: string
+        required: true
+      - name: distribution
+        label: 分发范围
+        type: string
+        default: "0"
+        enum: ["0", "1", "2", "3", "4", "5"]
+        description: 0 仅本组织，1 本社区，2 关联社区，3 所有社区，4 共享组，5 继承
+      - name: threat_level_id
+        label: 威胁等级
+        type: string
+        default: "4"
+        enum: ["1", "2", "3", "4"]
+        description: 1 高，2 中，3 低，4 未定义
+      - name: analysis
+        label: 分析状态
+        type: string
+        default: "0"
+        enum: ["0", "1", "2"]
+        description: 0 初始，1 进行中，2 已完成
+    request:
+      method: POST
+      path: /events/add
+      body:
+        info: "{{ inputs.info }}"
+        distribution: "{{ inputs.distribution }}"
+        threat_level_id: "{{ inputs.threat_level_id }}"
+        analysis: "{{ inputs.analysis }}"
+    output:
+      eventId: response.body.Event.id
+      uuid: response.body.Event.uuid
+      info: response.body.Event.info
+  # Docs: https://www.misp-project.org/openapi/#tag/Attributes/operation/addAttribute
+  - id: add_attribute
+    title: 添加属性
+    description: 向已有事件添加一个属性（IOC）。
+    category: utility
+    inputs:
+      - name: event_id
+        label: 事件 ID
+        type: string
+        required: true
+      - name: type
+        label: 属性类型
+        type: string
+        required: true
+        description: 例如 ip-dst、domain、md5、url
+      - name: value
+        label: 值
+        type: string
+        required: true
+      - name: category
+        label: 类别
+        type: string
+        default: Network activity
+        enum:
+          - Internal reference
+          - Targeting data
+          - Antivirus detection
+          - Payload delivery
+          - Artifacts dropped
+          - Payload installation
+          - Persistence mechanism
+          - Network activity
+          - Payload type
+          - Attribution
+          - External analysis
+          - Financial fraud
+          - Support Tool
+          - Social network
+          - Person
+          - Other
+      - name: to_ids
+        label: IDS 标记
+        type: boolean
+        default: true
+        description: 是否可用于检测（导出给 IDS）
+      - name: comment
+        label: 备注
+        type: string
+    request:
+      method: POST
+      path: /attributes/add/{{ inputs.event_id }}
+      body:
+        type: "{{ inputs.type }}"
+        category: "{{ inputs.category }}"
+        value: "{{ inputs.value }}"
+        to_ids: "{{ inputs.to_ids }}"
+        comment: "{{ inputs.comment }}"
+    output:
+      attributeId: response.body.Attribute.id
+      uuid: response.body.Attribute.uuid
+      eventId: response.body.Attribute.event_id
+  # Docs: https://www.misp-project.org/openapi/#tag/Sightings/operation/addSightingByValue
+  - id: add_sighting
+    title: 添加目击记录
+    description: 为所有值等于该值的属性记录一次目击（sighting）。
+    category: utility
+    inputs:
+      - name: value
+        label: 值
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /sightings/add
+      body:
+        values:
+          - "{{ inputs.value }}"
+    output:
+      sightingId: coalesce(response.body.Sighting.id, response.body.id)
+      attributeId: coalesce(response.body.Sighting.attribute_id, response.body.attribute_id)
+      eventId: coalesce(response.body.Sighting.event_id, response.body.event_id)

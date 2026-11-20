@@ -1,0 +1,349 @@
+# Written for LoopForge from Microsoft's public API documentation.
+id: sentinel
+title: Microsoft Sentinel
+vendor: Microsoft
+description: 通过 Azure Resource Manager（Microsoft.SecurityInsights）查询和处理 Sentinel 事件（incident）、读取事件告警与实体、维护监视列表。需要在 Entra ID 注册应用，并在工作区上授予 Microsoft Sentinel Reader（只读）或 Microsoft Sentinel Responder / Contributor（修改事件、评论、监视列表）角色。
+docs: https://learn.microsoft.com/rest/api/securityinsights/
+baseUrl: https://management.azure.com
+auth:
+  type: oauth2_client_credentials
+  tokenUrl: https://login.microsoftonline.com/{{ params.tenant_id }}/oauth2/v2.0/token
+  scope: https://management.azure.com/.default
+  clientId: client_id
+  clientSecret: client_secret
+params:
+  - name: tenant_id
+    label: 租户 ID
+    required: true
+  - name: subscription_id
+    label: 订阅 ID
+    required: true
+  - name: resource_group
+    label: 资源组
+    required: true
+  - name: workspace_name
+    label: Log Analytics 工作区名称
+    required: true
+  - name: api_version
+    label: API 版本
+    description: Microsoft.SecurityInsights 的 api-version，默认使用 GA 版本 2025-09-01
+    default: "2025-09-01"
+secrets:
+  - name: client_id
+    label: 应用（客户端）ID
+    required: true
+  - name: client_secret
+    label: 客户端密钥
+    required: true
+testAction: list_incidents
+testInputs:
+  top: 1
+actions:
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/incidents/list
+  - id: list_incidents
+    title: 查询事件列表
+    description: 按 OData 条件过滤、排序查询事件，可作为拉取式告警源。
+    category: enrichment
+    inputs:
+      - name: filter
+        label: 过滤条件（$filter）
+        type: string
+        description: 例如 properties/status eq 'New' and properties/severity eq 'High'
+      - name: orderby
+        label: 排序（$orderby）
+        type: string
+        default: properties/createdTimeUtc desc
+      - name: top
+        label: 最多返回条数（$top）
+        type: number
+        default: 50
+        description: 最大 1000
+    request:
+      method: GET
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/incidents
+      query:
+        api-version: "{{ params.api_version }}"
+        $filter: "{{ inputs.filter }}"
+        $orderby: "{{ inputs.orderby }}"
+        $top: "{{ inputs.top }}"
+    output:
+      items: response.body.value
+      count: len(response.body.value)
+      nextLink: response.body.nextLink
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/incidents/get
+  - id: get_incident
+    title: 事件详情
+    category: enrichment
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+        description: 事件资源名（GUID），即列表结果中的 name 字段
+    request:
+      method: GET
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/incidents/{{ inputs.incident_id }}
+      query:
+        api-version: "{{ params.api_version }}"
+    output:
+      title: response.body.properties.title
+      incidentStatus: response.body.properties.status
+      severity: response.body.properties.severity
+      incidentNumber: response.body.properties.incidentNumber
+      description: response.body.properties.description
+      ownerUpn: response.body.properties.owner.userPrincipalName
+      ownerObjectId: response.body.properties.owner.objectId
+      classification: response.body.properties.classification
+      alertsCount: response.body.properties.additionalData.alertsCount
+      incidentUrl: response.body.properties.incidentUrl
+      etag: response.body.etag
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/incidents/create-or-update
+  - id: update_incident
+    title: 更新事件状态/严重性
+    description: 把事件设为新建或处理中，并设置标题和严重性。该接口为 PUT，标题、状态、严重性都是必填项，请先用「事件详情」取得当前值再传入。文档未说明未提供的字段（描述、负责人、标签）是否保留，首次使用请在测试工作区确认。关闭事件请用「关闭事件」。
+    category: utility
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+      - name: title
+        label: 标题
+        type: string
+        required: true
+      - name: incident_status
+        label: 状态
+        type: string
+        required: true
+        enum: [New, Active]
+      - name: severity
+        label: 严重性
+        type: string
+        required: true
+        enum: [High, Medium, Low, Informational]
+    request:
+      method: PUT
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/incidents/{{ inputs.incident_id }}
+      query:
+        api-version: "{{ params.api_version }}"
+      body:
+        properties:
+          title: "{{ inputs.title }}"
+          status: "{{ inputs.incident_status }}"
+          severity: "{{ inputs.severity }}"
+    output:
+      incidentStatus: response.body.properties.status
+      severity: response.body.properties.severity
+      etag: response.body.etag
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/incidents/create-or-update
+  - id: assign_incident
+    title: 指派事件负责人
+    description: 把事件指派给 Entra ID 用户（对象 ID）。该接口为 PUT，标题、状态、严重性都是必填项，请先用「事件详情」取得当前值再传入。
+    category: utility
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+      - name: owner_object_id
+        label: 负责人对象 ID
+        type: string
+        required: true
+        description: Entra ID 用户的对象 ID（GUID）
+      - name: title
+        label: 标题
+        type: string
+        required: true
+      - name: incident_status
+        label: 状态
+        type: string
+        required: true
+        enum: [New, Active, Closed]
+      - name: severity
+        label: 严重性
+        type: string
+        required: true
+        enum: [High, Medium, Low, Informational]
+    request:
+      method: PUT
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/incidents/{{ inputs.incident_id }}
+      query:
+        api-version: "{{ params.api_version }}"
+      body:
+        properties:
+          title: "{{ inputs.title }}"
+          status: "{{ inputs.incident_status }}"
+          severity: "{{ inputs.severity }}"
+          owner:
+            objectId: "{{ inputs.owner_object_id }}"
+    output:
+      ownerUpn: response.body.properties.owner.userPrincipalName
+      ownerObjectId: response.body.properties.owner.objectId
+      etag: response.body.etag
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/incidents/create-or-update
+  - id: close_incident
+    title: 关闭事件
+    description: 以指定分类关闭事件，关闭后不再出现在待处理队列。该接口为 PUT，标题和严重性是必填项，请先用「事件详情」取得当前值再传入。分类原因：TruePositive 对应 SuspiciousActivity，BenignPositive 对应 SuspiciousButExpected，FalsePositive 对应 IncorrectAlertLogic 或 InaccurateData，Undetermined 不填。
+    category: response
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+      - name: title
+        label: 标题
+        type: string
+        required: true
+      - name: severity
+        label: 严重性
+        type: string
+        required: true
+        enum: [High, Medium, Low, Informational]
+      - name: classification
+        label: 分类
+        type: string
+        required: true
+        enum: [TruePositive, BenignPositive, FalsePositive, Undetermined]
+      - name: classification_reason
+        label: 分类原因
+        type: string
+        enum: [SuspiciousActivity, SuspiciousButExpected, IncorrectAlertLogic, InaccurateData]
+      - name: classification_comment
+        label: 关闭说明
+        type: string
+    request:
+      method: PUT
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/incidents/{{ inputs.incident_id }}
+      query:
+        api-version: "{{ params.api_version }}"
+      body:
+        properties:
+          title: "{{ inputs.title }}"
+          status: Closed
+          severity: "{{ inputs.severity }}"
+          classification: "{{ inputs.classification }}"
+          classificationReason: "{{ inputs.classification_reason }}"
+          classificationComment: "{{ inputs.classification_comment }}"
+    output:
+      incidentStatus: response.body.properties.status
+      classification: response.body.properties.classification
+      etag: response.body.etag
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/incident-comments/create-or-update
+  - id: add_comment
+    title: 添加事件评论
+    category: utility
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+      - name: comment_id
+        label: 评论 ID
+        type: string
+        required: true
+        description: 新评论的唯一 ID，建议使用新的 GUID；与已有评论 ID 相同会覆盖该评论
+      - name: message
+        label: 评论内容
+        type: string
+        required: true
+    request:
+      method: PUT
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/incidents/{{ inputs.incident_id }}/comments/{{ inputs.comment_id }}
+      query:
+        api-version: "{{ params.api_version }}"
+      body:
+        properties:
+          message: "{{ inputs.message }}"
+    output:
+      commentId: response.body.name
+      createdTimeUtc: response.body.properties.createdTimeUtc
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/incidents/list-alerts
+  - id: list_incident_alerts
+    title: 查询事件告警
+    category: enrichment
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/incidents/{{ inputs.incident_id }}/alerts
+      query:
+        api-version: "{{ params.api_version }}"
+    output:
+      items: response.body.value
+      count: len(response.body.value)
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/incidents/list-entities
+  - id: list_incident_entities
+    title: 查询事件实体
+    description: 返回事件关联的账户、主机、IP、文件哈希等实体，metaData 为按实体类型的计数。
+    category: enrichment
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/incidents/{{ inputs.incident_id }}/entities
+      query:
+        api-version: "{{ params.api_version }}"
+    output:
+      items: response.body.entities
+      count: len(response.body.entities)
+      metaData: response.body.metaData
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/watchlist-items/list
+  - id: list_watchlist_items
+    title: 查询监视列表条目
+    category: enrichment
+    inputs:
+      - name: watchlist_alias
+        label: 监视列表别名
+        type: string
+        required: true
+      - name: skip_token
+        label: 分页标记（$skipToken）
+        type: string
+        description: 上一页 nextLink 中的 skiptoken，首页留空
+    request:
+      method: GET
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/watchlists/{{ inputs.watchlist_alias }}/watchlistItems
+      query:
+        api-version: "{{ params.api_version }}"
+        $skipToken: "{{ inputs.skip_token }}"
+    output:
+      items: response.body.value
+      count: len(response.body.value)
+      nextLink: response.body.nextLink
+  # Docs: https://learn.microsoft.com/rest/api/securityinsights/watchlist-items/create-or-update
+  - id: add_watchlist_item
+    title: 添加监视列表条目
+    description: 向监视列表写入一行。监视列表常被分析规则用作白名单或黑名单，写入后会改变检测结果，因此需要审批。
+    category: response
+    inputs:
+      - name: watchlist_alias
+        label: 监视列表别名
+        type: string
+        required: true
+      - name: item_id
+        label: 条目 ID
+        type: string
+        required: true
+        description: 新条目的唯一 ID，建议使用新的 GUID；与已有条目 ID 相同会覆盖该条目
+      - name: items_key_value
+        label: 条目内容
+        type: object
+        required: true
+        description: '列名到值的 JSON 对象，列名需与监视列表一致，例如 {"IP": "203.0.113.5", "Note": "封禁"}'
+    request:
+      method: PUT
+      path: /subscriptions/{{ params.subscription_id }}/resourceGroups/{{ params.resource_group }}/providers/Microsoft.OperationalInsights/workspaces/{{ params.workspace_name }}/providers/Microsoft.SecurityInsights/watchlists/{{ inputs.watchlist_alias }}/watchlistItems/{{ inputs.item_id }}
+      query:
+        api-version: "{{ params.api_version }}"
+      body:
+        properties:
+          itemsKeyValue: "{{ inputs.items_key_value }}"
+    output:
+      itemId: response.body.name
+      itemsKeyValue: response.body.properties.itemsKeyValue

@@ -1,0 +1,128 @@
+# Written for LoopForge from abuse.ch's public API documentation.
+id: urlhaus
+title: URLhaus
+vendor: abuse.ch
+description: 在 abuse.ch URLhaus 中查询 URL、主机和恶意载荷（文件哈希）是否用于分发恶意软件。
+docs: https://urlhaus-api.abuse.ch/
+baseUrl: https://urlhaus-api.abuse.ch
+auth:
+  type: header
+  name: Auth-Key
+  secret: api_key
+secrets:
+  - name: api_key
+    label: Auth-Key
+    description: 在 abuse.ch 认证平台（auth.abuse.ch）免费申请
+    required: true
+testAction: host_info
+testInputs:
+  host: example.com
+actions:
+  # Docs: https://urlhaus-api.abuse.ch/#urlinfo
+  - id: url_info
+    title: URL 情报
+    description: URLhaus 没收录该 URL 时 found=false。
+    category: enrichment
+    inputs:
+      - name: url
+        label: URL
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /v1/url/
+      form:
+        url: "{{ inputs.url }}"
+    failIf: '!(response.body.query_status in ["ok", "no_results"])'
+    output:
+      found: response.body.query_status == "ok"
+      urlStatus: response.body.url_status
+      threat: response.body.threat
+      host: response.body.host
+      dateAdded: response.body.date_added
+      lastOnline: response.body.last_online
+      tags: response.body.tags
+      blacklists: response.body.blacklists
+      reference: response.body.urlhaus_reference
+      payloads: response.body.payloads
+      payloadCount: len(response.body.payloads)
+  # Docs: https://urlhaus-api.abuse.ch/#hostinfo
+  - id: host_info
+    title: 主机情报
+    description: 主机可以是 IPv4 地址、主机名或域名。URLhaus 没收录时 found=false。
+    category: enrichment
+    inputs:
+      - name: host
+        label: 主机
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /v1/host/
+      form:
+        host: "{{ inputs.host }}"
+    failIf: '!(response.body.query_status in ["ok", "no_results"])'
+    output:
+      found: response.body.query_status == "ok"
+      urlCount: response.body.url_count
+      firstSeen: response.body.firstseen
+      blacklists: response.body.blacklists
+      reference: response.body.urlhaus_reference
+      items: response.body.urls
+      count: len(response.body.urls)
+  # Docs: https://urlhaus-api.abuse.ch/#payloadinfo
+  - id: payload_md5
+    title: 载荷情报（MD5）
+    description: 按 MD5 查询 URLhaus 见过的恶意载荷及分发它的 URL。没收录时 found=false。
+    category: enrichment
+    inputs:
+      - name: md5
+        label: MD5
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /v1/payload/
+      form:
+        md5_hash: "{{ inputs.md5 }}"
+    failIf: '!(response.body.query_status in ["ok", "no_results"])'
+    output:
+      found: response.body.query_status == "ok"
+      sha256: response.body.sha256_hash
+      fileType: response.body.file_type
+      fileSize: response.body.file_size
+      signature: response.body.signature
+      firstSeen: response.body.firstseen
+      lastSeen: response.body.lastseen
+      urlCount: response.body.url_count
+      virustotal: response.body.virustotal
+      items: response.body.urls
+      count: len(response.body.urls)
+  # Docs: https://urlhaus-api.abuse.ch/#payloadinfo
+  - id: payload_sha256
+    title: 载荷情报（SHA256）
+    description: 按 SHA256 查询 URLhaus 见过的恶意载荷及分发它的 URL。没收录时 found=false。
+    category: enrichment
+    inputs:
+      - name: sha256
+        label: SHA256
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /v1/payload/
+      form:
+        sha256_hash: "{{ inputs.sha256 }}"
+    failIf: '!(response.body.query_status in ["ok", "no_results"])'
+    output:
+      found: response.body.query_status == "ok"
+      md5: response.body.md5_hash
+      fileType: response.body.file_type
+      fileSize: response.body.file_size
+      signature: response.body.signature
+      firstSeen: response.body.firstseen
+      lastSeen: response.body.lastseen
+      urlCount: response.body.url_count
+      virustotal: response.body.virustotal
+      items: response.body.urls
+      count: len(response.body.urls)

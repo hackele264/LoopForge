@@ -1,0 +1,265 @@
+# Written for LoopForge from PagerDuty's public API documentation.
+id: pagerduty
+title: PagerDuty
+vendor: PagerDuty
+description: 通过 PagerDuty REST API v2 查询、创建、确认和解决事件，添加备注，查询值班人。使用 REST API Key（集成 → API Access Keys）；EU 账号把服务地址改为 https://api.eu.pagerduty.com。写操作以"操作人邮箱"的身份执行。
+docs: https://docs.pagerduty.com/developer/api/reference/rest
+baseUrl: https://api.pagerduty.com
+auth:
+  type: header
+  name: Authorization
+  prefix: "Token token="
+  secret: api_key
+params:
+  - name: from_email
+    label: 操作人邮箱
+    description: 账号中有效用户的邮箱，写操作（创建、备注、确认、解决）作为 From 请求头发送
+secrets:
+  - name: api_key
+    label: REST API Key
+    required: true
+testAction: list_oncalls
+testInputs:
+  limit: 1
+actions:
+  # Docs: https://docs.pagerduty.com/developer/api/reference/rest/incidents/list-incidents
+  - id: list_incidents
+    title: 查询事件列表
+    description: 按状态、服务、紧急度和时间范围列出事件（第一页）。时间范围最长 6 个月，默认最近 1 个月。
+    category: enrichment
+    inputs:
+      - name: status
+        label: 状态
+        type: string
+        enum: [triggered, acknowledged, resolved]
+        description: 留空表示全部状态
+      - name: service_id
+        label: 服务 ID
+        type: string
+      - name: urgency
+        label: 紧急度
+        type: string
+        enum: [high, low]
+      - name: since
+        label: 起始时间
+        type: string
+        description: ISO 8601，例如 2026-11-01T00:00:00Z
+      - name: until
+        label: 结束时间
+        type: string
+        description: ISO 8601
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 25
+        description: 最大 100
+    request:
+      method: GET
+      path: /incidents
+      headers:
+        Accept: application/vnd.pagerduty+json;version=2
+      query:
+        "statuses[]": "{{ inputs.status }}"
+        "service_ids[]": "{{ inputs.service_id }}"
+        "urgencies[]": "{{ inputs.urgency }}"
+        since: "{{ inputs.since }}"
+        until: "{{ inputs.until }}"
+        limit: "{{ inputs.limit }}"
+    output:
+      items: response.body.incidents
+      count: len(response.body.incidents)
+      more: response.body.more
+
+  # Docs: https://docs.pagerduty.com/developer/api/reference/rest/incidents/get-incident
+  - id: get_incident
+    title: 查询事件
+    category: enrichment
+    inputs:
+      - name: incident_id
+        label: 事件 ID 或编号
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /incidents/{{ inputs.incident_id }}
+      headers:
+        Accept: application/vnd.pagerduty+json;version=2
+    output:
+      id: response.body.incident.id
+      number: response.body.incident.incident_number
+      title: response.body.incident.title
+      incidentStatus: response.body.incident.status
+      urgency: response.body.incident.urgency
+      htmlUrl: response.body.incident.html_url
+      serviceId: response.body.incident.service.id
+      serviceName: response.body.incident.service.summary
+      assignments: response.body.incident.assignments
+      createdAt: response.body.incident.created_at
+
+  # Docs: https://docs.pagerduty.com/developer/api/reference/rest/incidents/create-incident
+  - id: create_incident
+    title: 创建事件
+    description: 在指定服务上创建事件并按其升级策略通知值班人。需要在连接里填写操作人邮箱。
+    category: utility
+    inputs:
+      - name: service_id
+        label: 服务 ID
+        type: string
+        required: true
+      - name: title
+        label: 标题
+        type: string
+        required: true
+      - name: urgency
+        label: 紧急度
+        type: string
+        enum: [high, low]
+        default: high
+      - name: details
+        label: 详情
+        type: string
+        default: 由 LoopForge 创建
+    request:
+      method: POST
+      path: /incidents
+      headers:
+        Accept: application/vnd.pagerduty+json;version=2
+        From: "{{ params.from_email }}"
+      body:
+        incident:
+          type: incident
+          title: "{{ inputs.title }}"
+          urgency: "{{ inputs.urgency }}"
+          service:
+            id: "{{ inputs.service_id }}"
+            type: service_reference
+          body:
+            type: incident_body
+            details: "{{ inputs.details }}"
+    success: [201]
+    output:
+      id: response.body.incident.id
+      number: response.body.incident.incident_number
+      incidentStatus: response.body.incident.status
+      htmlUrl: response.body.incident.html_url
+
+  # Docs: https://docs.pagerduty.com/developer/api/reference/rest/incidents/create-incident-note
+  - id: add_note
+    title: 添加事件备注
+    description: 给事件添加备注（每个事件最多 2000 条）。需要在连接里填写操作人邮箱。
+    category: utility
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+      - name: content
+        label: 备注内容
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /incidents/{{ inputs.incident_id }}/notes
+      headers:
+        Accept: application/vnd.pagerduty+json;version=2
+        From: "{{ params.from_email }}"
+      body:
+        note:
+          content: "{{ inputs.content }}"
+    output:
+      id: response.body.note.id
+      createdAt: response.body.note.created_at
+
+  # Docs: https://docs.pagerduty.com/developer/api/reference/rest/incidents/update-incident
+  - id: acknowledge_incident
+    title: 确认事件
+    description: 把事件状态改为 acknowledged，停止继续升级通知。需要在连接里填写操作人邮箱。
+    category: utility
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+    request:
+      method: PUT
+      path: /incidents/{{ inputs.incident_id }}
+      headers:
+        Accept: application/vnd.pagerduty+json;version=2
+        From: "{{ params.from_email }}"
+      body:
+        incident:
+          type: incident_reference
+          status: acknowledged
+    output:
+      id: response.body.incident.id
+      incidentStatus: response.body.incident.status
+
+  # Docs: https://docs.pagerduty.com/developer/api/reference/rest/incidents/update-incident
+  - id: resolve_incident
+    title: 解决事件
+    description: 把事件状态改为 resolved。需要在连接里填写操作人邮箱。
+    category: utility
+    inputs:
+      - name: incident_id
+        label: 事件 ID
+        type: string
+        required: true
+    request:
+      method: PUT
+      path: /incidents/{{ inputs.incident_id }}
+      headers:
+        Accept: application/vnd.pagerduty+json;version=2
+        From: "{{ params.from_email }}"
+      body:
+        incident:
+          type: incident_reference
+          status: resolved
+    output:
+      id: response.body.incident.id
+      incidentStatus: response.body.incident.status
+
+  # Docs: https://docs.pagerduty.com/developer/api/reference/rest/on-calls/list-on-calls
+  - id: list_oncalls
+    title: 查询值班人
+    description: 列出当前（或指定时间范围内）的值班安排，可按升级策略或排班过滤。
+    category: enrichment
+    inputs:
+      - name: escalation_policy_id
+        label: 升级策略 ID
+        type: string
+      - name: schedule_id
+        label: 排班 ID
+        type: string
+      - name: earliest
+        label: 每级只取最近一人
+        type: boolean
+        default: true
+      - name: since
+        label: 起始时间
+        type: string
+        description: ISO 8601，默认当前时间
+      - name: until
+        label: 结束时间
+        type: string
+        description: ISO 8601，默认当前时间
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 25
+    request:
+      method: GET
+      path: /oncalls
+      headers:
+        Accept: application/vnd.pagerduty+json;version=2
+      query:
+        "escalation_policy_ids[]": "{{ inputs.escalation_policy_id }}"
+        "schedule_ids[]": "{{ inputs.schedule_id }}"
+        earliest: "{{ inputs.earliest }}"
+        since: "{{ inputs.since }}"
+        until: "{{ inputs.until }}"
+        limit: "{{ inputs.limit }}"
+    output:
+      items: response.body.oncalls
+      count: len(response.body.oncalls)
+      firstUser: first(response.body.oncalls).user.summary
+      firstUserId: first(response.body.oncalls).user.id

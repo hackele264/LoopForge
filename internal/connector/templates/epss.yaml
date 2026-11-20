@@ -1,0 +1,42 @@
+# Written for LoopForge from FIRST's public API documentation.
+id: epss
+title: EPSS
+vendor: FIRST
+description: 查询 CVE 的 EPSS 漏洞利用预测评分（未来 30 天被利用的概率）与百分位。公开接口，无需认证。
+docs: https://api.first.org/epss
+baseUrl: https://api.first.org
+auth:
+  type: none
+testAction: scores
+testInputs:
+  cves: CVE-2021-44228
+actions:
+  # Docs: https://api.first.org/epss
+  - id: scores
+    title: CVE 评分
+    description: 可一次查询多个 CVE（逗号分隔，总长不超过 2000 字符）。epss 和 percentile 为文本形式的小数；epss/percentile 字段取第一条结果。
+    category: enrichment
+    inputs:
+      - name: cves
+        label: CVE 编号
+        type: string
+        required: true
+        description: 例如 CVE-2021-44228,CVE-2022-27225
+      - name: date
+        label: 历史日期
+        type: string
+        description: YYYY-MM-DD，留空为最新评分（2021-04-14 起有数据）
+    request:
+      method: GET
+      path: /data/v1/epss
+      query:
+        cve: "{{ inputs.cves }}"
+        date: "{{ inputs.date }}"
+    failIf: response.body["status-code"] != 200
+    output:
+      items: response.body.data
+      count: len(response.body.data)
+      total: response.body.total
+      epss: response.body.data[0].epss
+      percentile: response.body.data[0].percentile
+      scoreDate: response.body.data[0].date
