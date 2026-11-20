@@ -1,0 +1,68 @@
+id: crowdstrike
+title: CrowdStrike Falcon
+vendor: CrowdStrike
+description: 按主机名查找 Falcon 终端，网络隔离（contain）或解除隔离。其他云区域请在连接里改服务地址，例如 https://api.eu-1.crowdstrike.com。
+docs: https://falcon.crowdstrike.com/documentation
+baseUrl: https://api.crowdstrike.com
+auth:
+  type: oauth2_client_credentials
+  tokenUrl: /oauth2/token
+  clientId: client_id
+  clientSecret: client_secret
+secrets:
+  - name: client_id
+    label: API Client ID
+    required: true
+  - name: client_secret
+    label: API Client Secret
+    required: true
+testAction: find_host
+testInputs:
+  hostname: loopforge-connection-test
+actions:
+  - id: find_host
+    title: 按主机名查找终端
+    category: enrichment
+    inputs:
+      - name: hostname
+        label: 主机名
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /devices/queries/devices/v1
+      query:
+        filter: "hostname:'{{ inputs.hostname }}'"
+    output:
+      count: len(response.body.resources)
+      deviceId: response.body.resources[0]
+  - id: contain
+    title: 网络隔离终端
+    category: response
+    inputs:
+      - name: device_id
+        label: 终端 ID
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /devices/entities/devices-actions/v2
+      query:
+        action_name: contain
+      body:
+        ids: ["{{ inputs.device_id }}"]
+  - id: lift_containment
+    title: 解除隔离
+    category: response
+    inputs:
+      - name: device_id
+        label: 终端 ID
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /devices/entities/devices-actions/v2
+      query:
+        action_name: lift_containment
+      body:
+        ids: ["{{ inputs.device_id }}"]

@@ -126,19 +126,49 @@ function renderAccessTokens(openCreate=false){
   const revealedPrompt=revealedSpec?accessMcpAgentPrompt(revealedSpec,base,state.revealedToken):'';
   const revealClients=state.revealedToken?[['cursor','Cursor'],['claude','Claude Code'],['codebuddy','CodeBuddy'],['codex','Codex']].map(([id,label])=>`<button type="button" class="${state.accessClient===id?'active':''}" data-revealed-client="${id}">${label}</button>`).join(''):'';
   const reveal=state.revealedToken?`<div class="token-reveal"><b>访问密钥已创建，可直接复制完整配置提示词</b><p>先选择客户端；复制内容会自动带上本次访问密钥和 Endpoint，无需再次替换占位符。平台只保存哈希，关闭后无法再次查看明文。</p><div class="access-clients token-client-picker">${revealClients}</div><div class="token-reveal-line"><code>${escapeHTML(state.revealedToken)}</code><button type="button" class="button primary small" data-copy-revealed-prompt="${encodeURIComponent(revealedPrompt)}">⧉ 复制 ${escapeHTML(revealedSpec.label)} 配置提示词</button><button type="button" class="button ghost small" data-copy-revealed>仅复制密钥</button><button type="button" class="button ghost small" data-close-revealed>已保存</button></div></div>`:'';
-  const rows=tokens.length?tokens.map(t=>{const revoked=!!t.revokedAt,expired=t.expiresAt&&new Date(t.expiresAt)<new Date();return `<div class="token-row ${revoked||expired?'revoked':''}"><div class="token-row-main"><b>${escapeHTML(t.name)}</b><code>${escapeHTML(t.prefix)}••••••••</code></div><div class="token-meta">创建 ${relativeTime(t.createdAt)} · ${t.lastUsedAt?`最近使用 ${relativeTime(t.lastUsedAt)}`:'尚未使用'} · ${revoked?'已撤销':expired?'已过期':`有效至 ${new Date(t.expiresAt).toLocaleDateString()}`}</div>${!revoked&&!expired?`<button type="button" class="button danger-outline small" data-revoke-token="${escapeHTML(t.id)}">撤销</button>`:''}</div>`}).join(''):'<div class="token-empty">还没有访问密钥，创建后即可接入 REST API 和 MCP。</div>';
+  const rows=tokens.length?tokens.map(t=>{const revoked=!!t.revokedAt,expired=t.expiresAt&&new Date(t.expiresAt)<new Date();return `<div class="token-row ${revoked||expired?'revoked':''}"><div class="token-row-main"><b>${escapeHTML(t.name)}</b><code>${escapeHTML(t.prefix)}••••••••</code></div><div class="token-meta">${escapeHTML(tokenScopeSummary(t,state.data?.projects))} · 创建 ${relativeTime(t.createdAt)} · ${t.lastUsedAt?`最近使用 ${relativeTime(t.lastUsedAt)}`:'尚未使用'} · ${revoked?'已撤销':expired?'已过期':`有效至 ${new Date(t.expiresAt).toLocaleDateString()}`}</div>${!revoked&&!expired?`<button type="button" class="button danger-outline small" data-revoke-token="${escapeHTML(t.id)}">撤销</button>`:''}</div>`}).join(''):'<div class="token-empty">还没有访问密钥，创建后即可接入 REST API 和 MCP。</div>';
   const activeCount=tokens.filter(t=>!t.revokedAt&&(!t.expiresAt||new Date(t.expiresAt)>new Date())).length;
-  body.innerHTML=`<div class="access-card access-tokens">${reveal}<form id="accessTokenForm" class="token-create-form"><label>密钥名称<input class="input" name="name" required maxlength="128" placeholder="例如：我的 Cursor"></label><label>有效期<select class="select" name="expiresInDays"><option value="30">30 天</option><option value="90" selected>90 天</option><option value="180">180 天</option><option value="365">365 天</option></select></label><button type="submit" class="button primary">创建访问密钥</button></form><div class="access-card-title"><i>K</i>我的访问密钥 <span style="margin-left:auto;color:var(--muted-2);font-size:10.5px">${activeCount} 个可用</span></div><div class="token-list">${rows}</div></div>`;
+  body.innerHTML=`<div class="access-card access-tokens">${reveal}<form id="accessTokenForm" class="token-create-form"><label>密钥名称<input class="input" name="name" required maxlength="128" placeholder="例如：我的 Cursor"></label><label>有效期<select class="select" name="expiresInDays"><option value="30">30 天</option><option value="90" selected>90 天</option><option value="180">180 天</option><option value="365">365 天</option></select></label>${tokenScopeFieldsHTML()}<button type="submit" class="button primary">创建访问密钥</button></form><div class="access-card-title"><i>K</i>我的访问密钥 <span style="margin-left:auto;color:var(--muted-2);font-size:10.5px">${activeCount} 个可用</span></div><div class="token-list">${rows}</div></div>`;
   body.querySelector('[data-copy-revealed]')?.addEventListener('click',()=>copyText(state.revealedToken,'访问密钥已复制'));
   body.querySelector('[data-copy-revealed-prompt]')?.addEventListener('click',b=>copyText(decodeURIComponent(b.currentTarget.dataset.copyRevealedPrompt),`${revealedSpec.label} 配置提示词已复制`));
   body.querySelectorAll('[data-revealed-client]').forEach(b=>b.onclick=()=>{state.accessClient=b.dataset.revealedClient;renderAccessTokens()});
   body.querySelector('[data-close-revealed]')?.addEventListener('click',()=>{state.revealedToken='';renderAccessTokens()});
   body.querySelector('#accessTokenForm')?.addEventListener('submit',createPersonalToken);
+  body.querySelectorAll('[name=tokenMode]').forEach(r=>r.onchange=()=>{const box=body.querySelector('[data-token-scopes]');if(box)box.hidden=r.value!=='scoped'||!r.checked});
   body.querySelectorAll('[data-revoke-token]').forEach(b=>b.onclick=()=>revokePersonalToken(b.dataset.revokeToken));
+}
+const TOKEN_SCOPES=[['runs:execute','启动和控制运行'],['cases:write','修改告警与案件'],['approvals:decide','审批人工门禁'],['config:write','修改流程、连接等配置'],['admin','平台管理']];
+// Builds the token create body; full access keeps the legacy unscoped token.
+function tokenGrantBody(values){
+  const body={name:String(values.name||'').trim(),expiresInDays:Number(values.expiresInDays)||90};
+  if(values.mode==='scoped'){
+    body.scopes=['read',...(values.scopes||[]).filter(s=>s&&s!=='read')];
+    const projects=(values.projectIds||[]).filter(Boolean);
+    if(projects.length)body.projectIds=projects;
+  }
+  return body;
+}
+// One-line description of what a token may do.
+function tokenScopeSummary(t,projects){
+  const scopes=(t&&t.scopes)||[],ids=(t&&t.projectIds)||[];
+  if(!scopes.length&&!ids.length)return '完全访问';
+  const labels=scopes.filter(s=>s!=='read').map(s=>(TOKEN_SCOPES.find(x=>x[0]===s)||[s,s])[1]);
+  const scope=labels.length?`只读 + ${labels.join('、')}`:'只读';
+  if(!ids.length)return scope;
+  const names=ids.map(id=>((projects||[]).find(p=>p.id===id)||{}).name||id);
+  return `${scope} · 限项目：${names.join('、')}`;
 }
 async function createPersonalToken(e){
   e.preventDefault();const form=e.currentTarget;
-  try{const result=await api('/api/auth/tokens',{method:'POST',body:JSON.stringify({name:form.elements.name.value.trim(),expiresInDays:Number(form.elements.expiresInDays.value)})});state.revealedToken=result.token;await loadAccessTokens();toast('访问密钥已创建，请立即复制','ok')}catch(err){toast(err.message,'err')}
+  const values={name:form.elements.name.value,expiresInDays:form.elements.expiresInDays.value,mode:form.querySelector('[name=tokenMode]:checked')?.value||'full',
+    scopes:[...form.querySelectorAll('[name=tokenScope]:checked')].map(b=>b.value),projectIds:[...form.querySelectorAll('[name=tokenProject]:checked')].map(b=>b.value)};
+  try{const result=await api('/api/auth/tokens',{method:'POST',body:JSON.stringify(tokenGrantBody(values))});state.revealedToken=result.token;await loadAccessTokens();toast('访问密钥已创建，请立即复制','ok')}catch(err){toast(err.message,'err')}
+}
+function tokenScopeFieldsHTML(){
+  const admin=!!state.currentUser?.isPlatformAdmin;
+  const scopes=TOKEN_SCOPES.filter(([s])=>s!=='admin'||admin).map(([s,l])=>`<label class="fd-check"><input type="checkbox" name="tokenScope" value="${s}"><span>${escapeHTML(l)}</span></label>`).join('');
+  const projects=(state.data?.projects||[]).map(p=>`<label class="fd-check"><input type="checkbox" name="tokenProject" value="${escapeHTML(p.id)}"><span>${escapeHTML(p.name||p.id)}</span></label>`).join('');
+  return `<fieldset class="token-scope"><legend>权限范围</legend><label class="fd-check"><input type="radio" name="tokenMode" value="full" checked><span>完全访问（与你的账号相同）</span></label><label class="fd-check"><input type="radio" name="tokenMode" value="scoped"><span>受限：只读，外加勾选的权限</span></label><div data-token-scopes hidden><div class="token-scope-list">${scopes}</div>${projects?`<p class="prop-hint">只允许访问这些项目（不勾选则不限项目）：</p><div class="token-scope-list">${projects}</div>`:''}</div></fieldset>`;
 }
 async function revokePersonalToken(id){
   if(!(await afConfirm({title:'撤销访问密钥',message:'撤销后，正在使用这个访问密钥的 API 和 MCP 客户端会立即失效。确定撤销？',danger:true,confirmText:'确定撤销'})))return;

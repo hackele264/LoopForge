@@ -1,0 +1,82 @@
+id: urlscan
+title: urlscan.io
+vendor: urlscan.io
+description: 提交 URL 沙箱扫描、查询扫描结果和搜索历史扫描。
+docs: https://urlscan.io/docs/api/
+baseUrl: https://urlscan.io
+auth:
+  type: header
+  name: API-Key
+  secret: api_key
+secrets:
+  - name: api_key
+    label: API Key
+    required: true
+testAction: search
+testInputs:
+  query: domain:example.com
+actions:
+  - id: submit
+    title: 提交 URL 扫描
+    description: 默认 private，扫描结果不公开。扫描需要数十秒，结果用“查询扫描结果”获取。
+    category: enrichment
+    inputs:
+      - name: url
+        label: URL
+        type: string
+        required: true
+      - name: visibility
+        label: 可见性
+        type: string
+        default: private
+        enum: [public, unlisted, private]
+    request:
+      method: POST
+      path: /api/v1/scan/
+      body:
+        url: "{{ inputs.url }}"
+        visibility: "{{ inputs.visibility }}"
+    output:
+      uuid: response.body.uuid
+      resultUrl: response.body.result
+  - id: result
+    title: 查询扫描结果
+    description: 扫描未完成时返回 found=false，可配合重试使用。
+    category: enrichment
+    inputs:
+      - name: uuid
+        label: 扫描 UUID
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/v1/result/{{ inputs.uuid }}/
+    success: [200, 404]
+    output:
+      found: response.status == 200
+      malicious: response.body.verdicts.overall.malicious
+      score: response.body.verdicts.overall.score
+      pageDomain: response.body.page.domain
+      pageIp: response.body.page.ip
+  - id: search
+    title: 搜索历史扫描
+    category: enrichment
+    inputs:
+      - name: query
+        label: 查询语句
+        type: string
+        required: true
+        description: 例如 domain:example.com
+      - name: size
+        label: 条数
+        type: number
+        default: 10
+    request:
+      method: GET
+      path: /api/v1/search/
+      query:
+        q: "{{ inputs.query }}"
+        size: "{{ inputs.size }}"
+    output:
+      total: response.body.total
+      results: response.body.results

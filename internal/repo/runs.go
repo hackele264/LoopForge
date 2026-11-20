@@ -37,6 +37,9 @@ func runFromRow(row runRow) domain.Run {
 		_ = json.Unmarshal(row.Repositories, &run.Repositories)
 	}
 	_ = json.Unmarshal(row.Snapshot, &run.WorkflowSnapshot)
+	if len(row.TriggerPayload) > 0 && string(row.TriggerPayload) != "null" {
+		run.TriggerPayload = domain.RawJSON(row.TriggerPayload)
+	}
 	_ = json.Unmarshal(row.ExecutionContext, &run.ExecutionContext)
 	_ = json.Unmarshal(row.UsageJSON, &run.Usage)
 	if row.Created != nil {
@@ -63,7 +66,7 @@ func runFromRow(row runRow) domain.Run {
 func runRowValues(run domain.Run) map[string]any {
 	return map[string]any{
 		"id": run.ID, "kind": run.Kind, "workflow_id": run.WorkflowID, "status": run.Status, "revision": run.Revision,
-		"input": run.Input, "human_context": run.HumanContext,
+		"input": run.Input, "trigger_payload": triggerPayloadValue(run.TriggerPayload), "case_id": strings.TrimSpace(run.ExecutionContext.CaseID), "human_context": run.HumanContext,
 		"quota_project_id": strings.TrimSpace(run.ExecutionContext.ProjectID), "quota_parent_run_id": strings.TrimSpace(run.ExecutionContext.ParentRunID),
 		"quota_exempt": run.ConcurrencyExempt, "admission_state": run.AdmissionState, "queue_entered_at": timePtr(run.QueueEnteredAt),
 		"quota_bucket":     runAdmissionBucketKey(run),
@@ -1035,6 +1038,7 @@ func (r *RunsRepo) writeRunOnce(run domain.Run, lockKey string, expectedRevision
 				if err := upsert(tx, "run_events", map[string]any{
 					"run_id": run.ID, "seq": i, "event_id": ev.ID, "node_id": ev.NodeID,
 					"type": ev.Type, "message": ev.Message, "payload": mustJSON(ev), "ts": timePtr(ev.Timestamp),
+					"actor_user_id": ev.ActorUserID,
 				}); err != nil {
 					return err
 				}
@@ -1542,6 +1546,14 @@ func queryAnalyticsWorkflowSnapshots(db *gorm.DB, runIDs []string) (map[string]d
 
 // repositoriesJSONValue 与 master 的 repositoriesJSON 一致：空集合写 SQL
 // NULL 而不是 '[]'，保证按 NULL 过滤的查询语义相同。
+// triggerPayloadValue stores an absent trigger payload as SQL NULL.
+func triggerPayloadValue(payload domain.RawJSON) any {
+	if len(payload) == 0 {
+		return nil
+	}
+	return []byte(payload)
+}
+
 func repositoriesJSONValue(repositories []domain.RepositoryContext) any {
 	if len(repositories) == 0 {
 		return nil

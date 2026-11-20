@@ -561,6 +561,52 @@ paths:
           $ref: "#/components/responses/NotFound"
         "502":
           description: SSO photo service error
+  /api/audit:
+    get:
+      tags: [System]
+      operationId: listAuditEvents
+      summary: List audit events (platform administrators)
+      parameters:
+        - {name: from, in: query, schema: {type: string}, description: RFC 3339 time or YYYY-MM-DD}
+        - {name: to, in: query, schema: {type: string}, description: Exclusive upper bound}
+        - {name: action, in: query, schema: {type: string}, description: Action prefix}
+        - {name: actorUserId, in: query, schema: {type: integer}}
+        - {name: projectId, in: query, schema: {type: string}}
+        - {name: outcome, in: query, schema: {type: string, enum: [success, failure, denied]}}
+        - {name: limit, in: query, schema: {type: integer, default: 200, maximum: 10000}}
+      responses:
+        "200":
+          description: Events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/AuditEvent"}
+        "403":
+          description: Not a platform administrator, or a token without the admin scope
+  /api/audit/export:
+    get:
+      tags: [System]
+      operationId: exportAuditEvents
+      summary: Download audit events as CSV or JSON (platform administrators)
+      parameters:
+        - {name: format, in: query, schema: {type: string, enum: [csv, json], default: csv}}
+        - {name: from, in: query, schema: {type: string}}
+        - {name: to, in: query, schema: {type: string}}
+        - {name: action, in: query, schema: {type: string}}
+        - {name: outcome, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: Up to 10000 events as an attachment
+          content:
+            text/csv:
+              schema: {type: string}
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/AuditEvent"}
+        "403":
+          description: Not a platform administrator
   /api/auth/tokens:
     get:
       tags: [System]
@@ -594,6 +640,14 @@ paths:
               properties:
                 name: {type: string, maxLength: 128}
                 expiresInDays: {type: integer, minimum: 1, maximum: 365, default: 90}
+                scopes:
+                  type: array
+                  description: Omit for a full-access token. A scoped token may always read and only makes the listed changes; admin needs a platform administrator.
+                  items: {type: string, enum: [read, runs:execute, cases:write, approvals:decide, config:write, admin]}
+                projectIds:
+                  type: array
+                  description: Limit the token to these projects (the owner must be a member). A project-limited token without scopes is read-only.
+                  items: {type: string}
       responses:
         "201":
           description: Plaintext token is returned once in this response
@@ -2098,6 +2152,928 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/alerts:
+    get:
+      tags: [Cases]
+      operationId: listAlerts
+      description: Alerts newest first, without payloads. Readable by project members of any role.
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: caseId
+          in: query
+          schema:
+            type: string
+        - name: uncased
+          in: query
+          schema:
+            type: string
+            enum: ["true"]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Alert"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/alerts/{alertId}:
+    parameters:
+      - name: alertId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Cases]
+      operationId: getAlert
+      responses:
+        "200":
+          description: Alert with its payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alert"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/alerts/{alertId}/escalate:
+    parameters:
+      - name: alertId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: escalateAlert
+      description: Opens a case from the alert, or attaches it to caseId. 409 when the alert already belongs to a case.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                caseId:
+                  type: string
+                title:
+                  type: string
+                severity:
+                  $ref: "#/components/schemas/Severity"
+      responses:
+        "200":
+          description: Alert attached to the case
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "201":
+          description: Case opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Alert already in a case
+  /api/cases:
+    get:
+      tags: [Cases]
+      operationId: listCases
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, new, investigating, pending_response, closed]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Cases, most recently updated first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Case"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+    post:
+      tags: [Cases]
+      operationId: createCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, title]
+              properties:
+                projectId:
+                  type: string
+                title:
+                  type: string
+                  maxLength: 300
+                description:
+                  type: string
+                severity:
+                  $ref: "#/components/schemas/Severity"
+                tags:
+                  type: array
+                  items:
+                    type: string
+                alertIds:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Case opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+        "409":
+          description: An alert already belongs to a case
+  /api/cases/{caseId}:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Cases]
+      operationId: getCase
+      responses:
+        "200":
+          description: Case with alerts, IOCs, timeline and linked runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  case:
+                    $ref: "#/components/schemas/Case"
+                  alerts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Alert"
+                  iocs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CaseIOC"
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CaseEvent"
+                  runs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        workflowId:
+                          type: string
+                        status:
+                          type: string
+                        createdAt:
+                          type: string
+                          format: date-time
+                        updatedAt:
+                          type: string
+                          format: date-time
+        "403":
+          description: Not a project member
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Cases]
+      operationId: updateCase
+      description: Partial update; omitted fields stay unchanged. Each change is recorded on the timeline and may start case triggers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                severity:
+                  $ref: "#/components/schemas/Severity"
+                status:
+                  type: string
+                  enum: [new, investigating, pending_response, closed]
+                resolution:
+                  type: string
+                  enum: [false_positive, resolved, duplicate]
+                  description: Required when closing.
+                assigneeId:
+                  type: integer
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Updated case
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/cases/{caseId}/comments:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: commentCase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                  maxLength: 10000
+      responses:
+        "201":
+          description: Comment event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseEvent"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/cases/{caseId}/iocs:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: addCaseIOC
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, value]
+              properties:
+                type:
+                  type: string
+                  enum: [ipv4, domain, url, email, md5, sha1, sha256, cve]
+                value:
+                  type: string
+      responses:
+        "201":
+          description: Indicator added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseIOC"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/cases/{caseId}/runs:
+    parameters:
+      - name: caseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Cases]
+      operationId: runCasePlaybook
+      description: Starts workflowId as the calling user, linked to the case; the trigger payload holds the case, its alerts and IOCs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflowId]
+              properties:
+                workflowId:
+                  type: string
+      responses:
+        "201":
+          description: Run started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/connectors:
+    get:
+      tags: [Connectors]
+      operationId: listConnectors
+      summary: List the connector catalog
+      description: Every connector with its actions, their inputs and output fields, and the params and secret names a connection needs. The built-in connector `loopforge` needs no connection.
+      responses:
+        "200":
+          description: Connectors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Connector"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/connectors/{connectorId}:
+    parameters:
+      - name: connectorId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Connectors]
+      operationId: getConnector
+      responses:
+        "200":
+          description: Connector
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connector"
+        "404":
+          description: Unknown connector
+  /api/connections:
+    get:
+      tags: [Connectors]
+      operationId: listConnections
+      summary: List a project's connections
+      description: Readable by project members of any role. Secret values are never returned.
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: connectorId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Connections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Connection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Not a member of the project
+    post:
+      tags: [Connectors]
+      operationId: createConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionInput"
+      responses:
+        "201":
+          description: Connection created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Not a writer of the project
+  /api/connections/{connectionId}:
+    parameters:
+      - name: connectionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Connectors]
+      operationId: getConnection
+      responses:
+        "200":
+          description: Connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "404":
+          description: Unknown connection
+    put:
+      tags: [Connectors]
+      operationId: updateConnection
+      description: Empty or omitted secrets keep their stored values; clearSecrets removes secrets.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionInput"
+      responses:
+        "200":
+          description: Connection updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      tags: [Connectors]
+      operationId: deleteConnection
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Unknown connection
+  /api/connections/{connectionId}/test:
+    parameters:
+      - name: connectionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Connectors]
+      operationId: testConnection
+      summary: Run the connector's read-only test action with this connection
+      responses:
+        "200":
+          description: Test outcome; ok is false when the vendor call failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  action:
+                    type: string
+                  summary:
+                    type: string
+                  error:
+                    type: string
+                  output:
+                    $ref: "#/components/schemas/OpenObject"
+                  durationMs:
+                    type: integer
+        "400":
+          description: The connector has no test action
+  /api/case-triggers:
+    get:
+      tags: [Cases]
+      operationId: listCaseTriggers
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Triggers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaseTrigger"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+    post:
+      tags: [Cases]
+      operationId: createCaseTrigger
+      description: Runs started by the trigger execute as the signed-in creator.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaseTrigger"
+      responses:
+        "201":
+          description: Trigger created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseTrigger"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+  /api/case-triggers/{triggerId}:
+    parameters:
+      - name: triggerId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [Cases]
+      operationId: updateCaseTrigger
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaseTrigger"
+      responses:
+        "200":
+          description: Trigger updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaseTrigger"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a member (read) or writer (write) of the project
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Cases]
+      operationId: deleteCaseTrigger
+      responses:
+        "200":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/webhooks:
+    get:
+      tags: [Webhooks]
+      operationId: listWebhooks
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: workflowId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Webhooks, newest first; secrets are never included
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Webhook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Webhooks]
+      operationId: createWebhook
+      description: Creates a webhook that starts workflowId when called. Its runs execute as the signed-in creator. The URL secret is returned only in this response and on rotation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookInput"
+      responses:
+        "201":
+          $ref: "#/components/responses/WebhookSecret"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not a project writer, or no signed-in user
+  /api/webhooks/{webhookId}:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Webhooks]
+      operationId: getWebhook
+      responses:
+        "200":
+          description: Webhook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Webhooks]
+      operationId: updateWebhook
+      description: Replaces the editable configuration. id, projectId and the URL secret cannot change. An empty signingSecret keeps the stored one; an empty signatureHeader turns signature checks off.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookInput"
+      responses:
+        "200":
+          description: Updated webhook
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Webhook"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Webhooks]
+      operationId: deleteWebhook
+      description: Deletes the webhook with its fingerprints and delivery log; its URL stops working.
+      responses:
+        "200":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/webhooks/{webhookId}/rotate:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Webhooks]
+      operationId: rotateWebhookSecret
+      description: Issues a new URL secret; the old URL stops working at once.
+      responses:
+        "200":
+          $ref: "#/components/responses/WebhookSecret"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/webhooks/{webhookId}/deliveries:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Webhooks]
+      operationId: listWebhookDeliveries
+      responses:
+        "200":
+          description: The 50 most recent deliveries, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WebhookDelivery"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/hooks/{webhookId}/{secret}:
+    parameters:
+      - name: webhookId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: secret
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Webhooks]
+      operationId: ingestWebhook
+      security: []
+      description: >-
+        Inbound alert. Authenticated by the URL secret, not a user session; an
+        unknown ID or wrong secret both answer 401. The JSON body (up to 1 MiB)
+        becomes the run's trigger payload; a body that is not an object is
+        wrapped as {"body": value}. GET takes query parameters instead and PUT
+        behaves like POST, when the webhook allows those methods. With
+        dedupFields set, an alert whose fingerprint was seen within
+        dedupWindowSeconds answers 200 deduplicated and starts nothing.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "202":
+          description: Run started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [started]
+                  runId:
+                    type: string
+        "200":
+          description: Duplicate alert; no run started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [deduplicated]
+                  runId:
+                    type: string
+                  hits:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Unknown webhook, wrong secret or invalid signature
+        "403":
+          description: Source address not allowed
+        "405":
+          description: Method not allowed
+        "409":
+          description: Webhook disabled
+        "413":
+          description: Body too large
+        "503":
+          description: The run could not start
+  /api/workflow-conditions/check:
+    post:
+      tags: [Workflows]
+      operationId: checkWorkflowCondition
+      summary: Dry-run a node runIf condition
+      description: >-
+        Compiles a runIf expression and evaluates it against sample values shaped
+        like a run. Nothing stored is read and nothing runs. With workflow and
+        nodeId the expression must also read only nodes upstream of nodeId, as
+        saving the workflow requires. Compile and reference problems answer 200
+        with valid=false; an evaluation error answers 200 with valid=true, no
+        result and stage=evaluate, which would fail the node at run time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expression]
+              additionalProperties: false
+              properties:
+                expression:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: 'runIf expression, for example nodes.triage.data.verdict == "malicious"'
+                trigger:
+                  type: object
+                  additionalProperties: true
+                  description: Sample trigger payload, readable as trigger.
+                input:
+                  type: string
+                  description: Sample run input, readable as run.input.
+                nodes:
+                  type: object
+                  description: Sample upstream nodes by node ID.
+                  additionalProperties:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      status:
+                        type: string
+                        description: Node status; defaults to succeeded.
+                      data:
+                        type: object
+                        additionalProperties: true
+                        description: Structured output, readable as nodes[id].data.
+                workflow:
+                  type: object
+                  additionalProperties: true
+                  description: Workflow definition used for the upstream check.
+                nodeId:
+                  type: string
+                  description: Node whose runIf this is; enables the upstream check.
+      responses:
+        "200":
+          description: Check result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [valid, nodeRefs]
+                properties:
+                  valid:
+                    type: boolean
+                  nodeRefs:
+                    type: array
+                    items:
+                      type: string
+                  result:
+                    type: boolean
+                  error:
+                    type: string
+                  stage:
+                    type: string
+                    enum: [compile, reference, evaluate]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/workflows:
     get:
       tags: [Workflows]
@@ -3815,6 +4791,21 @@ components:
           schema:
             $ref: "#/components/schemas/ScheduleJob"
   responses:
+    WebhookSecret:
+      description: Webhook with its URL secret, shown only now
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [webhook, secret, path]
+            properties:
+              webhook:
+                $ref: "#/components/schemas/Webhook"
+              secret:
+                type: string
+              path:
+                type: string
+                description: Ingress path, /api/hooks/{id}/{secret}; prefix it with the instance URL.
     BadRequest:
       description: Invalid request
       content:
@@ -4084,6 +5075,26 @@ components:
         expiresAt: {type: string, format: date-time}
         createdAt: {type: string, format: date-time}
         revokedAt: {type: string, format: date-time}
+        scopes: {type: array, items: {type: string}, description: Empty means full access}
+        projectIds: {type: array, items: {type: string}, description: Empty means every project the owner can reach}
+    AuditEvent:
+      type: object
+      properties:
+        id: {type: string}
+        at: {type: string, format: date-time}
+        actorUserId: {type: integer, format: int64}
+        actorLogin: {type: string}
+        actorKind: {type: string, description: user, system or anonymous}
+        tokenId: {type: string, description: API token used; empty for a browser session}
+        action: {type: string, description: "auth.login, auth.token.create, connector.action, or api METHOD route for API writes and denied requests"}
+        method: {type: string}
+        path: {type: string}
+        projectId: {type: string}
+        target: {type: string}
+        status: {type: integer}
+        outcome: {type: string, enum: [success, failure, denied]}
+        ip: {type: string}
+        detail: {$ref: "#/components/schemas/OpenObject"}
     PageFeedbackPayload:
       type: object
       description: Unknown fields, including any submitter fields, are ignored.
@@ -4868,6 +5879,399 @@ components:
         waitingPolicy: {type: string, enum: [actionable, event], description: Waiting reminders cancel if resolved before sending by default; event records are sent even after resolution.}
         contentMode: {type: string, enum: [template, ai]}
         aiInstruction: {type: string, maxLength: 4000, description: Writing instructions for the independent SOP report or the existing scheduled task model call}
+    Severity:
+      type: string
+      enum: [low, medium, high, critical]
+    Alert:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        webhookId:
+          type: string
+        source:
+          type: string
+        title:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        fingerprint:
+          type: string
+        caseId:
+          type: string
+        runId:
+          type: string
+        duplicate:
+          type: boolean
+        payload:
+          type: object
+          additionalProperties: true
+        receivedAt:
+          type: string
+          format: date-time
+    Case:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        number:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        status:
+          type: string
+          enum: [new, investigating, pending_response, closed]
+        resolution:
+          type: string
+          enum: [false_positive, resolved, duplicate]
+        assigneeId:
+          type: integer
+        tags:
+          type: array
+          items:
+            type: string
+        alertCount:
+          type: integer
+        createdBy:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+    CaseIOC:
+      type: object
+      properties:
+        caseId:
+          type: string
+        type:
+          type: string
+          enum: [ipv4, domain, url, email, md5, sha1, sha256, cve]
+        value:
+          type: string
+        alertId:
+          type: string
+        firstSeen:
+          type: string
+          format: date-time
+    CaseEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        caseId:
+          type: string
+        type:
+          type: string
+        message:
+          type: string
+        actorUserId:
+          type: integer
+        actorKind:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    Connector:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        vendor:
+          type: string
+        description:
+          type: string
+        docs:
+          type: string
+        baseUrl:
+          type: string
+        builtin:
+          type: boolean
+        source:
+          type: string
+        auth:
+          $ref: "#/components/schemas/OpenObject"
+        params:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConnectorField"
+        secrets:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConnectorField"
+        testAction:
+          type: string
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConnectorAction"
+    ConnectorField:
+      type: object
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+        default:
+          type: string
+    ConnectorAction:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [enrichment, response, utility]
+          description: Response actions may only run after an approval node.
+        inputs:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              label:
+                type: string
+              type:
+                type: string
+                enum: [string, number, boolean, list, object, any]
+              required:
+                type: boolean
+              description:
+                type: string
+              default: {}
+              enum:
+                type: array
+                items:
+                  type: string
+        output:
+          type: object
+          additionalProperties:
+            type: string
+        outputFields:
+          type: array
+          items:
+            type: string
+    Connection:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        connectorId:
+          type: string
+        name:
+          type: string
+        baseUrl:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        secretsSet:
+          type: array
+          items:
+            type: string
+          description: Names of the secrets that have a value.
+        createdBy:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ConnectionInput:
+      type: object
+      properties:
+        projectId:
+          type: string
+        connectorId:
+          type: string
+        name:
+          type: string
+        baseUrl:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        secrets:
+          type: object
+          additionalProperties:
+            type: string
+          writeOnly: true
+        clearSecrets:
+          type: array
+          items:
+            type: string
+    NodeAction:
+      type: object
+      required: [connector, action]
+      properties:
+        connector:
+          type: string
+        action:
+          type: string
+        connectionId:
+          type: string
+        inputs:
+          type: object
+          additionalProperties:
+            type: string
+          description: 'Templates; "{{ expr }}" parts read trigger, nodes and run like runIf.'
+    CaseTrigger:
+      type: object
+      required: [projectId, workflowId, name, events]
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        workflowId:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        events:
+          type: array
+          items:
+            type: string
+            enum: [case.created, case.alert_added, case.status_changed, case.severity_changed, case.escalated]
+        minSeverity:
+          $ref: "#/components/schemas/Severity"
+        createdBy:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    WebhookInput:
+      type: object
+      required: [projectId, workflowId, name]
+      properties:
+        projectId:
+          type: string
+        workflowId:
+          type: string
+        name:
+          type: string
+          maxLength: 120
+        enabled:
+          type: boolean
+        methods:
+          type: array
+          items:
+            type: string
+            enum: [POST, PUT, GET]
+          description: Accepted methods; empty means POST only.
+        allowedCidrs:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+          description: Source addresses or CIDR ranges; empty allows any caller.
+        signatureHeader:
+          type: string
+          description: Header carrying HMAC-SHA256 of the raw body as hex, optionally prefixed with sha256=.
+        signingSecret:
+          type: string
+          description: HMAC key. Write-only; empty on update keeps the stored key.
+        titleField:
+          type: string
+          description: Dot path into the payload used as the run input, for example alert.title.
+        severityField:
+          type: string
+          description: Dot path read as the alert severity, normalized to low/medium/high/critical.
+        caseMode:
+          type: string
+          enum: [none, per_fingerprint, per_alert]
+          description: per_fingerprint opens one case per new fingerprint and adds duplicates to it (needs dedupFields); per_alert opens a case for every alert.
+        dedupFields:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+          description: Dot paths forming the alert fingerprint; empty disables deduplication.
+        dedupWindowSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+          description: Dedup window; defaults to 3600 when dedupFields is set.
+    Webhook:
+      allOf:
+        - $ref: "#/components/schemas/WebhookInput"
+        - type: object
+          properties:
+            id:
+              type: string
+            secretPrefix:
+              type: string
+            hasSigningSecret:
+              type: boolean
+            createdBy:
+              type: integer
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+            lastTriggeredAt:
+              type: string
+              format: date-time
+    WebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+        webhookId:
+          type: string
+        receivedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [started, deduplicated, rejected, failed]
+        httpStatus:
+          type: integer
+        runId:
+          type: string
+        fingerprint:
+          type: string
+        message:
+          type: string
+        sourceIp:
+          type: string
     WorkflowNode:
       type: object
       required: [id, name, type]
@@ -4880,7 +6284,9 @@ components:
           type: string
         type:
           type: string
-          enum: [agent, script, command, approval, sop]
+          enum: [agent, script, command, approval, sop, action]
+        action:
+          $ref: "#/components/schemas/NodeAction"
         agentId:
           type: string
         executorId:

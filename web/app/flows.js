@@ -164,6 +164,7 @@ function renderWorkflowMeta(){
   const pill=$('#flowSettingsPill');if(pill)pill.textContent=catalogGeneric(wf)?(isPlatformAdmin()?'通用模板 · 可编辑':'通用模板'):`${wf.status==='published'?'已发布':'草稿'} · v${wf.version} · ${wf.nodes.length} 步`;
   renderFlowHeader();
   if(typeof flowPalette!=='undefined')flowPalette.render();
+  if(typeof loadWorkflowWebhooks==='function')loadWorkflowWebhooks();
 }
 async function switchFlowWorkflow(id){
   if(!id||id===state.workflow?.id)return false;
@@ -202,11 +203,12 @@ function addNode(type,opts={}){
     return;
   }
   flowHistory.record();
-  const labels={agent:'新 Agent 节点',script:'脚本节点',approval:'人工门禁',sop:'SOP 节点'};
+  const labels={agent:'新 Agent 节点',script:'脚本节点',approval:'人工门禁',sop:'SOP 节点',action:'动作节点'};
   const firstSOP=type==='sop'?sopWorkflowChoices(state.workflow.id)[0]:null;
   const agentId=type==='agent'?(opts.agentId||workflowAgents()[0]?.id||''):'';
   const agent=agentId?workflowAgent(agentId):null;
   const node={id:uid(type),name:firstSOP?.name||(opts.agentId&&agent?.name)||labels[type]||'新节点',type,agentId,sopWorkflowId:firstSOP?.id||'',scriptLanguage:type==='script'?'shell':'',script:type==='script'?"printf 'passed\\n'":'',executionScope:'run',artifactOutputs:firstSOP?sopDeclaredArtifacts(firstSOP):[],rejectTo:'',onFailure:'fail',retryStrategy:'targeted_fix',carryOver:['failed_checks','last_error','upstream_artifacts'],maxAttempts:1,maxReworks:3,position:at};
+  if(type==='action')node.action={connector:'',action:'',connectionId:'',inputs:{}};
   state.workflow.nodes.push(node);state.selectedNode=node.id;
   dirty();renderCanvas();renderProperties();
 }
@@ -275,12 +277,12 @@ function spreadCrowdedNodes(wf){
   return true;
 }
 
-const FLOW_NODE_TYPES={agent:{icon:'bot',label:'Agent 步骤'},script:{icon:'terminal',label:'脚本步骤'},sop:{icon:'layers',label:'子 SOP'},preview:{icon:'eye',label:'预览构建'},approval:{icon:'shield',label:'人工门禁'}};
+const FLOW_NODE_TYPES={agent:{icon:'bot',label:'Agent 步骤'},script:{icon:'terminal',label:'脚本步骤'},sop:{icon:'layers',label:'子 SOP'},action:{icon:'zap',label:'动作'},preview:{icon:'eye',label:'预览构建'},approval:{icon:'shield',label:'人工门禁'}};
 function flowNodeKind(n){return isPreviewBuildNode(n.id)?'preview':(FLOW_NODE_TYPES[n.type]?n.type:'approval')}
 function flowNodeTint(n){
   const kind=flowNodeKind(n);
   if(kind==='agent'&&n.agentId)return flowPalette.roleTint(n.agentId);
-  return {agent:'79 107 255',script:'139 92 246',sop:'14 165 233',preview:'217 119 6',approval:'16 163 127'}[kind];
+  return {agent:'79 107 255',script:'139 92 246',sop:'14 165 233',action:'234 88 12',preview:'217 119 6',approval:'16 163 127'}[kind];
 }
 function flowNodeEl(id){return document.querySelector(`#nodes .flow-node[data-id="${CSS.escape(id)}"]`)}
 function nodeMeta(n){
@@ -304,13 +306,113 @@ function nodeMeta(n){
     const line=(n.script||'').trim().split('\n')[0];
     return {kind:'script',subtitle:n.scriptLanguage==='python'?'Python 脚本':'Shell 脚本',tags:[line?{text:line,mono:true}:{text:'未配置脚本',warn:true}]};
   }
+  if(n.type==='action')return flowActionMeta(n);
   if(n.type==='sop'){
     const wf=sopWorkflowChoices().find(w=>w.id===n.sopWorkflowId)||(state.data.workflows||[]).find(w=>w.id===n.sopWorkflowId);
     const arts=(n.artifactOutputs||[]).map(a=>a.name).filter(Boolean);
     const tags=!n.sopWorkflowId?[{text:'未选择流程',warn:true}]:!wf?[{text:'流程不可用',warn:true}]:[{text:arts.length?`交给下一步：${arts.join('、')}`:'产物交给下一步'}];
     return {kind:'sop',subtitle:wf?.name||(n.sopWorkflowId?'流程不可用':'未选择流程'),tags};
   }
-  return {kind:'approval',subtitle:'人工门禁',tags:[{text:'等待人工确认'}]};
+  return {kind:'approval',subtitle:'人工门禁',tags:[{text:flowApproverSummary(n.approvers)||'等待人工确认'}]};
+}
+// Branching badges shown on every node kind: its RunIf and join strategy.
+function flowBranchTags(n){
+  const tags=[];
+  const cond=String(n.runIf||'').trim();
+  if(cond)tags.push({text:'条件：'+cond,mono:true});
+  if(n.join==='any')tags.push({text:'任一上游即可'});
+  return tags;
+}
+// Node ids a RunIf expression reads through nodes.<id> or nodes["<id>"].
+function flowRunIfRefs(src){
+  const refs=[],seen=new Set(),re=/nodes\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*(["'])((?:(?!\2).)*)\2\s*\])/g;
+  let m;while((m=re.exec(String(src||''))))(id=>{if(!seen.has(id)){seen.add(id);refs.push(id)}})(m[1]||m[3]);
+  return refs;
+}
+function flowUpstream(wf,id){
+  const incoming=new Map();(wf?.edges||[]).forEach(e=>{if(!incoming.has(e.target))incoming.set(e.target,[]);incoming.get(e.target).push(e.source)});
+  const out=new Set(),stack=[...(incoming.get(id)||[])];
+  while(stack.length){const cur=stack.pop();if(out.has(cur))continue;out.add(cur);stack.push(...(incoming.get(cur)||[]))}
+  return out;
+}
+// Cheap client-side check of a RunIf; the server compiles it on save.
+function flowRunIfProblem(wf,n){
+  const src=String(n?.runIf||'').trim();if(!src)return '';
+  if(src.length>2000)return '条件不能超过 2000 个字符';
+  if(/(^|[^=!<>])=($|[^=])/.test(src))return '比较请用 ==，单个 = 不是合法运算符';
+  let depth=0;for(const c of src){if(c==='('||c==='[')depth++;else if(c===')'||c===']')depth--;if(depth<0)return '括号不匹配'}
+  if(depth)return '括号不匹配';
+  const up=flowUpstream(wf,n.id),ids=new Set((wf?.nodes||[]).map(x=>x.id));
+  for(const ref of flowRunIfRefs(src)){
+    if(!ids.has(ref))return `引用的步骤「${ref}」不存在`;
+    if(!up.has(ref))return `「${ref}」不在本步骤上游，条件只能读上游步骤的结果`;
+  }
+  return '';
+}
+function flowApproverSummary(p){
+  const ids=(p?.userIds||[]).length,roles=(p?.roles||[]).map(r=>({owner:'项目 Owner',maintainer:'维护者',member:'项目成员',admin:'平台管理员'}[r]||r));
+  if(!ids&&!roles.length)return '';
+  return '审批人：'+[...roles,...(ids?[`${ids} 位指定用户`]:[])].join('、');
+}
+// Parses the approver form into the saved policy; empty means legacy rule.
+function flowApproversFromForm(userText,roles){
+  const userIds=[...new Set(String(userText||'').split(/[\s,，]+/).map(x=>x.trim()).filter(Boolean).map(Number).filter(x=>Number.isInteger(x)&&x>0))];
+  const allowed=['owner','maintainer','member','admin'],picked=allowed.filter(r=>(roles||[]).includes(r));
+  return userIds.length||picked.length?{...(userIds.length?{userIds}:{}),...(picked.length?{roles:picked}:{})}:null;
+}
+// An example value for a JSON Schema, used to prefill condition dry runs.
+function flowSampleFromSchema(schema,depth=0){
+  if(!schema||typeof schema!=='object'||depth>6)return null;
+  if(Array.isArray(schema.enum)&&schema.enum.length)return schema.enum[0];
+  const type=Array.isArray(schema.type)?schema.type[0]:schema.type;
+  if(type==='object'||(!type&&schema.properties)){const out={};Object.entries(schema.properties||{}).forEach(([k,v])=>{out[k]=flowSampleFromSchema(v,depth+1)});return out}
+  if(type==='array')return schema.items?[flowSampleFromSchema(schema.items,depth+1)]:[];
+  if(type==='number'||type==='integer')return 1;
+  if(type==='boolean')return true;
+  if(type==='string')return '';
+  return null;
+}
+// Default upstream samples: each node the condition reads, succeeded, with
+// data shaped by its declared output schema.
+function flowConditionSampleNodes(wf,n){
+  const out={};
+  flowRunIfRefs(n?.runIf).forEach(id=>{const src=(wf?.nodes||[]).find(x=>x.id===id);if(!src)return;out[id]={status:'succeeded',...(src.outputSchema?{data:flowSampleFromSchema(src.outputSchema)}:{})}});
+  return out;
+}
+// Builds the dry-run request from the drawer's sample text, or explains
+// which sample is not valid JSON.
+function flowConditionCheckRequest(wf,n,triggerText,nodesText){
+  const parse=(text,label)=>{const t=String(text||'').trim();if(!t)return {value:undefined};try{const v=JSON.parse(t);if(!v||typeof v!=='object'||Array.isArray(v))return {error:`${label}必须是 JSON 对象`};return {value:v}}catch(e){return {error:`${label}不是合法 JSON：${e.message}`}}};
+  const trigger=parse(triggerText,'示例触发负载'),nodes=parse(nodesText,'示例上游结果');
+  if(trigger.error||nodes.error)return {error:trigger.error||nodes.error};
+  return {body:{expression:String(n?.runIf||'').trim(),...(trigger.value?{trigger:trigger.value}:{}),...(nodes.value?{nodes:nodes.value}:{}),workflow:{nodes:(wf?.nodes||[]).map(x=>({id:x.id,name:x.name,type:x.type})),edges:(wf?.edges||[]).map(e=>({id:e.id,source:e.source,target:e.target,when:e.when}))},nodeId:n?.id}};
+}
+function flowConditionCheckText(r){
+  if(!r)return {text:'',bad:false};
+  if(r.stage==='compile'||r.stage==='reference')return {text:'条件有误：'+r.error,bad:true};
+  if(r.stage==='evaluate')return {text:'求值出错，运行时本步骤会失败（可接失败分支）：'+r.error,bad:true};
+  return r.result?{text:'条件成立：本步骤会执行',bad:false}:{text:'条件不成立：本步骤及只依赖它的下游会被跳过',bad:false};
+}
+// Configuration-check items for conditions, joins and error branches.
+function flowBranchDiagnostics(wf){
+  const items=[],nodes=wf?.nodes||[],edges=wf?.edges||[];
+  nodes.forEach(n=>{
+    const problem=flowRunIfProblem(wf,n);
+    if(problem)items.push({level:'error',title:n.name,detail:'执行条件：'+problem});
+    const inDeg=edges.filter(e=>e.target===n.id).length;
+    if(n.join==='any'&&inDeg<2)items.push({level:'warn',title:n.name,detail:'设置了「任一上游即可」，但只有一个上游，效果与默认相同'});
+    if(n.join!=='any'&&inDeg>1){
+      const branchy=edges.filter(e=>e.target===n.id).some(e=>e.when==='error'||String(nodes.find(x=>x.id===e.source)?.runIf||'').trim());
+      if(branchy)items.push({level:'warn',title:n.name,detail:'多个上游里有条件分支或失败分支，它们通常不会同时走到；默认要等全部上游，本步骤可能总被跳过，汇合处请改为「任一上游」'});
+    }
+    if(String(n.runIf||'').trim()&&!flowRunIfProblem(wf,n)){
+      const noSchema=flowRunIfRefs(n.runIf).map(id=>nodes.find(x=>x.id===id)).filter(x=>x&&(x.type==='script'||x.type==='agent')&&!x.outputSchema);
+      if(noSchema.length)items.push({level:'warn',title:n.name,detail:`条件读取的「${noSchema.map(x=>x.name).join('、')}」没有声明输出结构，运行时字段可能为空`});
+    }
+    const errOut=edges.filter(e=>e.source===n.id&&e.when==='error').length;
+    if(errOut&&n.onFailure==='reject'&&n.rejectTo)items.push({level:'warn',title:n.name,detail:'同时配置了失败打回和失败分支：先打回，返工次数用完后才走失败分支'});
+  });
+  return items;
 }
 function flowNodeHTML(n,run,ro){
   const m=nodeMeta(n),kind=m.kind,status=run?.nodes?.[n.id]?.status||'';
@@ -318,8 +420,8 @@ function flowNodeHTML(n,run,ro){
   const tile=agent?escapeHTML(flowPalette.initial(agent.name)):flowPalette.icon(FLOW_NODE_TYPES[kind].icon,16);
   const title=state.renamingNode===n.id?`<input class="fd-rename" value="${escapeHTML(n.name)}" maxlength="120" aria-label="重命名步骤">`:escapeHTML(n.name);
   const cls=['flow-node','fd-node','t-'+kind,state.selectedNode===n.id?'sel':'',state.connectFrom===n.id?'connecting':'',status?'s-'+status:'',kind==='preview'?'preview-build':''].filter(Boolean).join(' ');
-  const tags=m.tags.map(t=>`<span class="fd-tag${t.warn?' warn':''}${t.mono?' mono':''}" title="${escapeHTML(t.text)}">${escapeHTML(t.text)}</span>`).join('');
-  const outs=`<div class="fd-out ok">成功<span class="fd-port out" data-outlet="success" title="拖到下一步"></span></div>`+(kind==='preview'?'':`<div class="fd-out rj">失败打回<span class="fd-port out" data-outlet="reject" title="拖到失败时要打回的步骤"></span></div>`);
+  const tags=[...m.tags,...(kind==='preview'?[]:flowBranchTags(n))].map(t=>`<span class="fd-tag${t.warn?' warn':''}${t.mono?' mono':''}" title="${escapeHTML(t.text)}">${escapeHTML(t.text)}</span>`).join('');
+  const outs=`<div class="fd-out ok">成功<span class="fd-port out" data-outlet="success" title="拖到下一步"></span></div>`+(kind==='preview'?'':`<div class="fd-out er">失败分支<span class="fd-port out" data-outlet="error" title="拖到失败时要执行的步骤"></span></div><div class="fd-out rj">失败打回<span class="fd-port out" data-outlet="reject" title="拖到失败时要打回的步骤"></span></div>`);
   return `<div class="${cls}" data-id="${escapeHTML(n.id)}" style="left:${n.position.x}px;top:${n.position.y}px;--tint:${flowNodeTint(n)}"><span class="fd-port in" title="连到这里"></span><div class="fd-nh"><span class="fd-tile">${tile}</span><div class="fd-nt"><div class="node-title">${title}</div><div class="node-subtitle">${escapeHTML(m.subtitle)}</div></div>${status?`<span class="fd-status s-${escapeHTML(status)}">${statusText(status)||escapeHTML(status)}</span>`:''}${ro?'':`<button type="button" class="fd-more" data-node-menu aria-label="更多操作">${flowPalette.icon('more')}</button>`}</div><div class="fd-nbody">${tags}</div><div class="fd-outs">${outs}</div></div>`;
 }
 function renderCanvas(){
@@ -390,7 +492,8 @@ function flowDiagnostics(){
   const nodes=state.workflow.nodes||[],edges=state.workflow.edges||[],incoming=new Map(nodes.map(n=>[n.id,0])),items=[];edges.forEach(e=>incoming.has(e.target)&&incoming.set(e.target,incoming.get(e.target)+1));
   const starts=nodes.filter(n=>incoming.get(n.id)===0);items.push({level:!nodes.length?'error':starts.length===1?'ok':'warn',title:'流程入口',detail:!nodes.length?'至少添加一个节点':starts.length===1?`从「${starts[0].name}」开始`:`检测到 ${starts.length} 个入口；这些节点会并行启动`});
   items.push({level:state.data.sandboxes?.some(s=>s.id===state.workflow.sandboxProfileId)?'ok':'error',title:'运行沙箱',detail:state.workflow.sandboxProfileId?`整条流程使用 ${state.workflow.sandboxProfileId}`:'尚未选择 Workflow 运行沙箱'});
-  nodes.forEach(n=>{if(isPreviewBuildNode(n.id)){const inDeg=edges.filter(e=>e.target===n.id).length;items.push({level:inDeg?'ok':'warn',title:n.name,detail:inDeg?`插在流程中间：CodeBuddy ${workflowPreviewModel(state.workflow)} 构建静态站点，运行成功后归档预览`:'还没有前序依赖，会作为流程入口直接运行；请从上游节点连线到此'});return}if(n.type==='agent'){const missing=[];const agent=workflowAgent(n.agentId);const generic=catalogGeneric(state.workflow);if(!n.agentId)missing.push('角色');else if(!agent)missing.push(generic?'通用模板角色未加载':'角色不属于当前项目或未共享');else if(!generic&&!(agent.executorId||n.executorId))missing.push('角色未选模型');if(!(n.artifactOutputs||[]).length&&!(agent?.artifactOutputs||[]).length)missing.push('角色产物契约');items.push({level:missing.length?'warn':'ok',title:n.name,detail:missing.length?`尚未配置：${missing.join('、')}`:generic?'已绑定通用模板角色；任务书与门禁在角色定义中':'已绑定角色；任务书与门禁在角色定义中'})}if(n.type==='sop'){const missing=[];const wf=sopWorkflowChoices(state.workflow.id).find(w=>w.id===n.sopWorkflowId)||(state.data.workflows||[]).find(w=>w.id===n.sopWorkflowId);if(!n.sopWorkflowId)missing.push('要跑的 SOP');else if(!wf)missing.push('引用的 SOP 不存在');if(n.sopWorkflowId===state.workflow.id)missing.push('不能引用自己');items.push({level:missing.length?'error':'ok',title:n.name,detail:missing.length?`尚未配置：${missing.join('、')}`:`引用「${wf.name}」，产物交给下一步`})}if(n.rejectTo&&!nodes.some(x=>x.id===n.rejectTo))items.push({level:'error',title:n.name,detail:'失败打回目标不存在'})});
+  nodes.forEach(n=>{if(isPreviewBuildNode(n.id)){const inDeg=edges.filter(e=>e.target===n.id).length;items.push({level:inDeg?'ok':'warn',title:n.name,detail:inDeg?`插在流程中间：CodeBuddy ${workflowPreviewModel(state.workflow)} 构建静态站点，运行成功后归档预览`:'还没有前序依赖，会作为流程入口直接运行；请从上游节点连线到此'});return}if(n.type==='agent'){const missing=[];const agent=workflowAgent(n.agentId);const generic=catalogGeneric(state.workflow);if(!n.agentId)missing.push('角色');else if(!agent)missing.push(generic?'通用模板角色未加载':'角色不属于当前项目或未共享');else if(!generic&&!(agent.executorId||n.executorId))missing.push('角色未选模型');if(!(n.artifactOutputs||[]).length&&!(agent?.artifactOutputs||[]).length)missing.push('角色产物契约');items.push({level:missing.length?'warn':'ok',title:n.name,detail:missing.length?`尚未配置：${missing.join('、')}`:generic?'已绑定通用模板角色；任务书与门禁在角色定义中':'已绑定角色；任务书与门禁在角色定义中'})}if(n.type==='sop'){const missing=[];const wf=sopWorkflowChoices(state.workflow.id).find(w=>w.id===n.sopWorkflowId)||(state.data.workflows||[]).find(w=>w.id===n.sopWorkflowId);if(!n.sopWorkflowId)missing.push('要跑的 SOP');else if(!wf)missing.push('引用的 SOP 不存在');if(n.sopWorkflowId===state.workflow.id)missing.push('不能引用自己');items.push({level:missing.length?'error':'ok',title:n.name,detail:missing.length?`尚未配置：${missing.join('、')}`:`引用「${wf.name}」，产物交给下一步`})}if(n.type==='action')items.push(flowActionReadiness(n));if(n.rejectTo&&!nodes.some(x=>x.id===n.rejectTo))items.push({level:'error',title:n.name,detail:'失败打回目标不存在'})});
+  items.push(...flowBranchDiagnostics(state.workflow));
   if(nodes.length>1&&edges.length===0)items.push({level:'warn',title:'成功路径',detail:'多个节点之间没有依赖关系，将同时启动'});if(!items.some(x=>x.level==='error'))items.push({level:'ok',title:'结构校验',detail:'未发现阻止保存或试运行的结构错误'});return items;
 }
 function setFlowView(mode){$$('.canvas-view-toggle button').forEach(b=>b.classList.toggle('active',b.dataset.flowView===mode));$('#canvas').hidden=mode!=='canvas';$('#flowCheckPanel').hidden=mode!=='check';$('#flowStageWrap')?.classList.toggle('check-mode',mode==='check');if(mode==='check')$('#flowCheckPanel').innerHTML=`<div class="page-heading" style="margin-bottom:14px"><div><h1 style="font-size:17px">配置检查</h1><p>运行前检查入口、CLI、产物契约和返工路径。</p></div></div><div class="flow-check-grid">${flowDiagnostics().map(x=>`<div class="flow-check-item ${x.level}"><b>${escapeHTML(x.title)}</b><p>${escapeHTML(x.detail)}</p></div>`).join('')}</div>`;else flowViewport.renderMinimap()}
@@ -399,7 +502,7 @@ function setThemePreference(preference){if(!['light','dark','system'].includes(p
 function renderThemeSegment({snap=false}={}){const preference=typeof activeThemePreference==='string'?activeThemePreference:readThemePreference();document.querySelectorAll('.upp-theme-seg').forEach(seg=>{seg.querySelectorAll('[data-theme-pref]').forEach(button=>{const on=button.dataset.themePref===preference;button.classList.toggle('active',on);if(button.getAttribute('aria-checked')!==String(on))button.setAttribute('aria-checked',String(on));button.tabIndex=on?0:-1});const tabs=window.AgentFlowSlidingTabs;if(!tabs)return;const indicator=seg.querySelector(':scope > [data-sliding-indicator]');if(snap&&indicator)indicator.style.transition='none';tabs.mount(seg,{activeSelector:'.active',auto:true,compact:true,cacheKey:'upp-theme-seg'}).refresh();if(snap&&indicator){indicator.getBoundingClientRect();requestAnimationFrame(()=>{indicator.style.transition=''})}})}
 function renderThemeToggle(){renderThemeSegment();const light=document.documentElement.dataset.theme==='light',button=$('#themeToggle');if(!button)return;window.AgentFlowHarnessIcons?.render(button.querySelector('span'),light?'moon':'sun');button.querySelector('b').textContent=light?'深色':'亮色';button.title=light?'切换到深色主题':'切换到亮色主题'}
 function toggleTheme(){const theme=document.documentElement.dataset.theme==='light'?'dark':'light';try{localStorage.setItem(THEME_KEY,theme)}catch{}applyTheme(theme)}
-function statusText(s){return ({pending:'待执行',running:'运行中',succeeded:'已完成',failed:'失败',waiting_approval:'待审批',cancelled:'已取消'}[s]||'')}
+function statusText(s){return ({pending:'待执行',running:'运行中',succeeded:'已完成',failed:'失败',waiting_approval:'待审批',cancelled:'已取消',skipped:'已跳过'}[s]||'')}
 function canvasPoint(e){return flowViewport.toWorld(e.clientX,e.clientY)}
 function flowReaches(from,to){
   const seen=new Set([from]),queue=[from];
@@ -409,6 +512,7 @@ function flowReaches(from,to){
 function flowConnectCheck(src,tgt,outlet){
   if(!tgt||tgt.id===src.id)return {ok:false,why:outlet==='reject'?'不能打回到自己':'不能连到自己'};
   if(outlet==='reject')return isPreviewBuildNode(src.id)?{ok:false,why:'预览构建节点没有失败出口'}:{ok:true};
+  if(outlet==='error'&&isPreviewBuildNode(src.id))return {ok:false,why:'预览构建节点没有失败出口'};
   if(state.workflow.edges.some(e=>e.source===src.id&&e.target===tgt.id))return {ok:false,why:'依赖已经存在'};
   if(flowReaches(tgt.id,src.id))return {ok:false,why:'会形成循环依赖；返工请用「失败打回」'};
   return {ok:true};
@@ -436,7 +540,7 @@ function startFlowConnect(e,src,outlet){
   const up=()=>{
     port.removeEventListener('pointermove',move);port.removeEventListener('pointerup',up);port.removeEventListener('pointercancel',up);
     clearMarks();
-    if(!moved){state.connectCursor=null;renderEdges();flowToast(outlet==='reject'?'点一下失败时要打回的步骤，Esc 取消':'点一下下一步，Esc 取消');return}
+    if(!moved){state.connectCursor=null;renderEdges();flowToast(outlet==='reject'?'点一下失败时要打回的步骤，Esc 取消':outlet==='error'?'点一下失败时要执行的步骤，Esc 取消':'点一下下一步，Esc 取消');return}
     if(hover)completeFlowConnect(hover);else cancelFlowConnect();
   };
   port.addEventListener('pointermove',move);port.addEventListener('pointerup',up);port.addEventListener('pointercancel',up);
@@ -447,7 +551,7 @@ function completeFlowConnect(target){
   if(!src){renderCanvas();return false}
   const check=flowConnectCheck(src,target,outlet);
   if(!check.ok){toast(check.why);renderCanvas();return false}
-  if(outlet!=='reject')return connect(src.id,target.id);
+  if(outlet!=='reject')return connect(src.id,target.id,outlet==='error'?'error':'success');
   const prev=state.workflow.nodes.find(x=>x.id===src.rejectTo);
   if(!setRejectTo(src.id,target.id)){renderCanvas();return false}
   flowToast(prev&&prev.id!==target.id?`「${src.name}」的打回目标已从「${prev.name}」改为「${target.name}」`:`「${src.name}」失败时打回到「${target.name}」`,{undo:true});
@@ -458,15 +562,15 @@ function cancelFlowConnect(){
   state.connectFrom=null;state.connectCursor=null;state.connectOutlet=null;
   renderCanvas();return true;
 }
-function connect(source,target){
+function connect(source,target,when='success'){
   if(source===target)return false;
   if(state.workflow.edges.some(e=>e.source===source&&e.target===target)){toast('依赖已经存在');renderCanvas();return false}
   if(flowReaches(target,source)){toast('不能形成循环依赖；返工请使用「失败打回」');renderCanvas();return false}
   flowHistory.record();
-  state.workflow.edges.push({id:uid('edge'),source,target,when:'success'});
+  state.workflow.edges.push({id:uid('edge'),source,target,when:when==='error'?'error':'success'});
   dirty();renderCanvas();renderProperties();
   const a=state.workflow.nodes.find(n=>n.id===source),b=state.workflow.nodes.find(n=>n.id===target);
-  flowToast(`已连接「${a?.name||source}」→「${b?.name||target}」`,{undo:true});
+  flowToast(when==='error'?`「${a?.name||source}」失败时转到「${b?.name||target}」`:`已连接「${a?.name||source}」→「${b?.name||target}」`,{undo:true});
   return true;
 }
 // Sets the single reject route of a node; an empty target clears it.
@@ -491,7 +595,7 @@ function flowNodeMetrics(id){
   let m=cache.get(id);if(m)return m;
   const el=flowNodeEl(id);if(!el||!el.offsetWidth)return null;
   const row=sel=>{const r=el.querySelector(sel);return r?r.offsetTop+r.offsetHeight/2:el.offsetHeight/2};
-  m={w:el.offsetWidth,h:el.offsetHeight,ok:row('.fd-out.ok'),rj:row('.fd-out.rj')};
+  m={w:el.offsetWidth,h:el.offsetHeight,ok:row('.fd-out.ok'),er:row('.fd-out.er'),rj:row('.fd-out.rj')};
   cache.set(id,m);return m;
 }
 function nodeBox(n){
@@ -501,7 +605,7 @@ function nodeBox(n){
 function flowPortPoint(n,kind){
   const m=flowNodeMetrics(n.id),p=n.position;
   if(!m||kind==='in')return {x:p.x,y:p.y+27};
-  return {x:p.x+m.w,y:p.y+(kind==='reject'?m.rj:m.ok)};
+  return {x:p.x+m.w,y:p.y+(kind==='reject'?m.rj:kind==='error'?m.er:m.ok)};
 }
 function scheduleFlowEdges(){
   if(scheduleFlowEdges.raf)return;
@@ -532,13 +636,14 @@ async function deleteRejectEdgeByNodeId(nodeId){
 function renderEdges(){
   const svg=$('#edges');if(!svg)return;
   const wf=state.workflow,del=(x,y)=>`<g class="fd-e-del" transform="translate(${x} ${y})"><circle r="9"/><path d="M -3 -3 L 3 3 M 3 -3 L -3 3"/></g>`;
-  let html='<defs><marker id="fdArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="fd-arrow" d="M1 1.5 8.5 5 1 8.5"/></marker><marker id="fdArrowHover" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="fd-arrow hover" d="M1 1.5 8.5 5 1 8.5"/></marker><marker id="fdArrowReject" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="fd-arrow rj" d="M1 1.5 8.5 5 1 8.5"/></marker></defs>';
+  let html='<defs><marker id="fdArrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="fd-arrow" d="M1 1.5 8.5 5 1 8.5"/></marker><marker id="fdArrowHover" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="fd-arrow hover" d="M1 1.5 8.5 5 1 8.5"/></marker><marker id="fdArrowReject" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="fd-arrow rj" d="M1 1.5 8.5 5 1 8.5"/></marker><marker id="fdArrowError" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="fd-arrow er" d="M1 1.5 8.5 5 1 8.5"/></marker></defs>';
   if(wf){
     const byId=new Map(wf.nodes.map(n=>[n.id,n]));
     wf.edges.forEach(e=>{
       const a=byId.get(e.source),b=byId.get(e.target);if(!a||!b)return;
-      const p=flowPortPoint(a,'success'),q=flowPortPoint(b,'in'),d=flowCurve(p,q);
-      html+=`<g class="fd-e" data-edge="${escapeHTML(e.id)}"><path class="fd-e-hit" d="${d}"/><path class="edge fd-e-path" d="${d}"/>${del((p.x+q.x)/2,(p.y+q.y)/2)}<title>${escapeHTML(a.name)} → ${escapeHTML(b.name)} · 点击删除</title></g>`;
+      const err=e.when==='error',p=flowPortPoint(a,err?'error':'success'),q=flowPortPoint(b,'in'),d=flowCurve(p,q),mx=(p.x+q.x)/2,my=(p.y+q.y)/2;
+      const label=err?`<g class="fd-e-label er" transform="translate(${mx} ${my})"><rect x="-30" y="-10" width="60" height="20" rx="10"/><text text-anchor="middle" y="3.5">失败分支</text></g>`:'';
+      html+=`<g class="fd-e${err?' er':''}" data-edge="${escapeHTML(e.id)}"><path class="fd-e-hit" d="${d}"/><path class="edge fd-e-path" d="${d}"/>${label}${del(err?mx+42:mx,my)}<title>${escapeHTML(a.name)} ${err?'失败时转到':'→'} ${escapeHTML(b.name)} · 点击删除</title></g>`;
     });
     wf.nodes.forEach(n=>{
       const t=n.rejectTo&&byId.get(n.rejectTo);if(!t)return;
@@ -547,8 +652,8 @@ function renderEdges(){
     });
     const src=state.connectFrom&&byId.get(state.connectFrom);
     if(src&&state.connectCursor){
-      const reject=state.connectOutlet==='reject';
-      html+=`<path class="fd-e-temp${reject?' rj':''}" d="${flowCurve(flowPortPoint(src,reject?'reject':'success'),state.connectCursor)}"/>`;
+      const outlet=state.connectOutlet||'success';
+      html+=`<path class="fd-e-temp${outlet==='reject'?' rj':outlet==='error'?' er':''}" d="${flowCurve(flowPortPoint(src,outlet),state.connectCursor)}"/>`;
     }
   }
   svg.innerHTML=html;
@@ -1001,6 +1106,61 @@ function renderPreviewBuildProperties(host,n){
   const spaBox=$('#previewNodeSpa');
   if(spaBox)spaBox.onchange=()=>{flowHistory.record();updatePreviewContract({spaFallback:spaBox.checked});dirty();};
 }
+const FLOW_APPROVER_ROLES=[['owner','项目 Owner'],['maintainer','维护者'],['member','项目成员（非只读）'],['admin','平台管理员']];
+function flowApproverFieldHTML(n){
+  const roles=n.approvers?.roles||[],ids=(n.approvers?.userIds||[]).join(', ');
+  return `<div class="fd-field"><label>谁可以确认（可选）</label><div class="fd-checks">${FLOW_APPROVER_ROLES.map(([r,label])=>`<label class="fd-check"><input type="checkbox" data-approver-role="${r}" ${roles.includes(r)?'checked':''}><span>${escapeHTML(label)}</span></label>`).join('')}</div><input class="input" id="approverUserIds" inputmode="numeric" placeholder="另外指定用户 ID，逗号分隔" value="${escapeHTML(ids)}"><p class="prop-hint">留空沿用现状：有项目写权限的人都能确认。设置后只有名单内的人能批准或打回，不带用户身份的 API 调用会被拒绝。</p></div>`;
+}
+function flowRunIfHint(n){
+  const wf=state.workflow,up=[...flowUpstream(wf,n.id)].map(id=>wf.nodes.find(x=>x.id===id)).filter(Boolean);
+  return up.length?`可读取上游 ${up.map(x=>`nodes["${x.id}"]`).join('、')} 的 .data / .status，以及 trigger、run。条件不成立时本步骤及只依赖它的下游会被跳过。`:'本步骤没有上游，只能读取 trigger（触发负载）和 run。';
+}
+function flowBranchSectionHTML(n){
+  const wf=state.workflow,inDeg=wf.edges.filter(e=>e.target===n.id).length,problem=flowRunIfProblem(wf,n);
+  const join=inDeg>1?`<div class="fd-field"><label>多个上游时</label><select class="select" data-p="join"><option value="" ${n.join!=='any'?'selected':''}>等全部上游走到这里</option><option value="any" ${n.join==='any'?'selected':''}>任一上游走到这里就开始</option></select><p class="prop-hint">分支汇合处用「任一」：没走到的分支会被跳过，不会卡住汇合步骤。</p></div>`:'';
+  const schemaHint=n.type==='agent'?`Agent 通过 submit_output 工具提交符合结构的对象，提交前不能给出「通过」结论；下游条件用 nodes["${escapeHTML(n.id)}"].data 读取。`:`脚本把 JSON 对象写到 $LOOPFORGE_OUTPUT，触发负载在 $LOOPFORGE_TRIGGER；下游条件用 nodes["${escapeHTML(n.id)}"].data 读取。声明后脚本必须写出符合结构的结果。`;
+  const schema=n.type==='script'||n.type==='agent'?`<div class="fd-field"><label>输出结构（JSON Schema，可选）</label><textarea class="input fd-mono" rows="4" id="outputSchemaInput" spellcheck="false" placeholder='{"type":"object","required":["verdict"]}'>${escapeHTML(n.outputSchema?JSON.stringify(n.outputSchema,null,2):'')}</textarea><p class="prop-hint" id="outputSchemaCheck">${schemaHint}</p></div>`:'';
+  const samples=(state.conditionSamples||{})[n.id]||{};
+  const nodesSample=samples.nodes??JSON.stringify(flowConditionSampleNodes(wf,n),null,2);
+  const tryOpen=(state.flowFolds||{}).tryCondition?'open':'';
+  const tryPane=`<details class="fd-try" data-fold="tryCondition" ${tryOpen}><summary>试运行条件</summary><div class="fd-field"><label>示例触发负载（JSON，可选）</label><textarea class="input fd-mono" rows="3" id="tryTrigger" data-try spellcheck="false" placeholder='{"severity":"high"}'>${escapeHTML(samples.trigger||'')}</textarea></div><div class="fd-field"><label>示例上游结果（按节点 ID）</label><textarea class="input fd-mono" rows="4" id="tryNodes" data-try spellcheck="false">${escapeHTML(nodesSample)}</textarea><p class="prop-hint">按上游节点声明的输出结构预填；status 不写时按已完成计算。只用这里的示例数据求值，不会运行任何步骤。</p></div><div class="fd-try-row"><button type="button" class="fd-btn sm" id="tryCondition" data-try>${flowPalette.icon('sparkles',13)}<span>试运行</span></button><span class="fd-try-result" id="tryResult" role="status"></span></div></details>`;
+  return `<section class="fd-sec"><div class="fd-sec-h"><span class="fd-sec-t">执行条件</span></div><div class="fd-sec-b"><div class="fd-field"><label>满足条件才执行（可选）</label><textarea class="input fd-mono" rows="3" data-p="runIf" spellcheck="false" placeholder='例如：nodes.triage.data.verdict == "malicious"'>${escapeHTML(n.runIf||'')}</textarea><p class="prop-hint${problem?' fd-hint-err':''}" id="runIfCheck">${escapeHTML(problem||flowRunIfHint(n))}</p></div>${String(n.runIf||'').trim()?tryPane:''}${join}${schema}</div></section>`;
+}
+function bindBranchFields(host,n){
+  const cond=host.querySelector('[data-p="runIf"]'),check=host.querySelector('#runIfCheck');
+  cond?.addEventListener('input',()=>{const problem=flowRunIfProblem(state.workflow,n);if(check){check.textContent=problem||flowRunIfHint(n);check.classList.toggle('fd-hint-err',!!problem)}});
+  const schema=host.querySelector('#outputSchemaInput'),schemaCheck=host.querySelector('#outputSchemaCheck'),schemaHint=schemaCheck?.textContent||'';
+  if(schema)schema.oninput=()=>{
+    const text=schema.value.trim();let next,err='';
+    if(text){try{next=JSON.parse(text);if(!next||typeof next!=='object'||Array.isArray(next))err='输出结构必须是 JSON 对象'}catch(e){err='JSON 格式不正确：'+e.message}}
+    if(schemaCheck){schemaCheck.textContent=err||schemaHint;schemaCheck.classList.toggle('fd-hint-err',!!err)}
+    if(err)return;
+    flowHistory.record({merge:`p:${n.id}:outputSchema`});
+    if(next)n.outputSchema=next;else delete n.outputSchema;
+    dirty();renderCanvas();
+  };
+  const tryTrigger=host.querySelector('#tryTrigger'),tryNodes=host.querySelector('#tryNodes'),tryBtn=host.querySelector('#tryCondition'),tryResult=host.querySelector('#tryResult');
+  const keepSamples=()=>{(state.conditionSamples||(state.conditionSamples={}))[n.id]={trigger:tryTrigger?.value||'',nodes:tryNodes?.value||''}};
+  tryTrigger&&(tryTrigger.oninput=keepSamples);tryNodes&&(tryNodes.oninput=keepSamples);
+  if(tryBtn)tryBtn.onclick=async()=>{
+    const show=(text,bad)=>{tryResult.textContent=text;tryResult.classList.toggle('bad',!!bad);tryResult.classList.toggle('good',!bad&&!!text)};
+    const req=flowConditionCheckRequest(state.workflow,n,tryTrigger?.value,tryNodes?.value);
+    if(req.error)return show(req.error,true);
+    if(!req.body.expression)return show('先填写执行条件',true);
+    tryBtn.disabled=true;show('试运行中…',false);
+    try{const r=await api('/api/workflow-conditions/check',{method:'POST',body:JSON.stringify(req.body)});const v=flowConditionCheckText(r);show(v.text,v.bad)}
+    catch(e){show(e.message||'试运行失败',true)}
+    finally{tryBtn.disabled=false}
+  };
+  const ids=host.querySelector('#approverUserIds'),roleBoxes=[...host.querySelectorAll('[data-approver-role]')];
+  const syncApprovers=()=>{
+    flowHistory.record({merge:`p:${n.id}:approvers`});
+    const policy=flowApproversFromForm(ids?.value,roleBoxes.filter(b=>b.checked).map(b=>b.dataset.approverRole));
+    if(policy)n.approvers=policy;else delete n.approvers;
+    dirty();renderCanvas();
+  };
+  ids&&(ids.oninput=syncApprovers);roleBoxes.forEach(b=>b.onchange=syncApprovers);
+}
 function renderProperties(){
   const host=$('#properties');if(!host)return;
   const n=state.workflow?.nodes.find(node=>node.id===state.selectedNode);
@@ -1018,8 +1178,9 @@ function renderProperties(){
     const scriptCountText=scriptLines?`已编写 ${scriptLines} 行 (${n.scriptLanguage==='python'?'Python':'Shell'})`:'未配置 (点击编写)';
     const scriptPreview=scriptLines?`<div class="script-snippet-preview" id="previewScriptNodeEditor" title="点击在代码编辑器中修改"><code>${escapeHTML(n.script.slice(0, 120))}${n.script.length>120?'…':''}</code></div>`:'';
     const scriptPane=n.type==='script'?`<div class="fd-row2"><div class="fd-field"><label>脚本语言</label><select class="select" data-p="scriptLanguage"><option value="shell" ${n.scriptLanguage!=='python'?'selected':''}>Shell</option><option value="python" ${n.scriptLanguage==='python'?'selected':''}>Python</option></select></div><div class="fd-field"><label>执行范围</label><select class="select" data-p="executionScope"><option value="run" ${n.executionScope!=='repositories'?'selected':''}>Run 工作区</option><option value="repositories" ${n.executionScope==='repositories'?'selected':''}>每个代码仓库</option></select></div></div><div class="fd-field"><label>脚本内容</label><button type="button" class="script-editor-launch-btn btn-open-code-editor" id="openScriptNodeEditor"><span>${flowPalette.icon('code',14)} 打开代码编辑器编写脚本</span><span class="script-btn-badge">${scriptCountText}</span></button>${scriptPreview}<p class="prop-hint">逐仓库执行时会自动进入每个仓库根目录，无需手写 cd。</p></div>`:'';
-    const approvalPane=n.type==='approval'?`<div class="fd-field"><label>需要确认什么（可选）</label><textarea class="input" rows="4" data-p="taskPrompt" placeholder="例如：检查 MR 的改动范围和测试结果，确认可以上线">${escapeHTML(n.taskPrompt||'')}</textarea><p class="prop-hint">确认步骤会停在「待我确认」，批准后才继续；这段说明会和上下游一起展示给确认人。</p></div>`:'';
-    const main=`<section class="fd-sec"><div class="fd-sec-h"><span class="fd-sec-t">主配置</span></div><div class="fd-sec-b">${n.type==='agent'?agentBindCard(n):''}${sopSelect}${scriptPane}${approvalPane}</div></section>`;
+    const approvalPane=n.type==='approval'?`<div class="fd-field"><label>需要确认什么（可选）</label><textarea class="input" rows="4" data-p="taskPrompt" placeholder="例如：检查 MR 的改动范围和测试结果，确认可以上线">${escapeHTML(n.taskPrompt||'')}</textarea><p class="prop-hint">确认步骤会停在「待我确认」，批准后才继续；这段说明会和上下游一起展示给确认人。</p></div>${flowApproverFieldHTML(n)}`:'';
+    const actionPane=n.type==='action'?flowActionPaneHTML(n):'';
+    const main=`<section class="fd-sec"><div class="fd-sec-h"><span class="fd-sec-t">主配置</span></div><div class="fd-sec-b">${n.type==='agent'?agentBindCard(n):''}${sopSelect}${scriptPane}${approvalPane}${actionPane}</div></section>${flowBranchSectionHTML(n)}`;
     const gates=n.type==='agent'?flowFold('gates','校验顺序',`${effectiveNodeArtifacts(n,workflowAgent(n.agentId)).length} 产物 · ${roleGates(workflowAgent(n.agentId)).length} 门禁`,nodeGatePane(n),false):'';
     const wantReject=state.flowWantReject??(n.onFailure==='reject');
     const targets=state.workflow.nodes.filter(x=>x.id!==n.id).map(x=>`<option value="${escapeHTML(x.id)}" ${x.id===n.rejectTo?'selected':''}>${escapeHTML(x.name)}</option>`).join('');
@@ -1028,11 +1189,13 @@ function renderProperties(){
     const adv=flowFold('adv','高级','重试 · 返工 · 统计',`<div class="fd-row2"><div class="fd-field"><label>单轮最多试几次</label><input class="input" type="number" min="1" max="9" data-p="maxAttempts" value="${n.maxAttempts||1}"></div><div class="fd-field"><label>最多返工几轮</label><input class="input" type="number" min="1" max="20" data-p="maxReworks" value="${n.maxReworks||3}"></div></div><div class="fd-field"><label>返工策略</label><select class="select" data-p="retryStrategy"><option value="targeted_fix" ${n.retryStrategy!=='full_redo'?'selected':''}>只修失败项</option><option value="full_redo" ${n.retryStrategy==='full_redo'?'selected':''}>整步重做</option></select></div>${n.type==='script'?`<label class="fd-check"><input type="checkbox" data-p="runOnWorkspaceRebuild" ${n.runOnWorkspaceRebuild?'checked':''}><span>工作区重建时先执行（脚本需可重复执行）</span></label>`:''}${metric}`,false);
     host.innerHTML=`${flowDrawerHead(n,kind,FLOW_NODE_TYPES[kind].label)}<div class="fd-db">${main}${gates}${fail}${adv}</div><div class="fd-df"><span class="fd-df-hint"><kbd>F2</kbd> 重命名 · <kbd>⌘D</kbd> 复制 · <kbd>Del</kbd> 删除 · <kbd>⌘Z</kbd> 撤销</span></div>`;
     bindNodeProperties(host,n);
+    bindBranchFields(host,n);
+    if(n.type==='action')bindFlowActionPane(host,n);
   }
   host.querySelector('#closeNodeDrawer')?.addEventListener('click',closeNodeDrawer);
   const del=host.querySelector('#deletePropertyNode');if(del)del.onclick=()=>removeNode(n.id);
   host.querySelectorAll('[data-fold]').forEach(d=>d.addEventListener('toggle',()=>{(state.flowFolds||(state.flowFolds={}))[d.dataset.fold]=d.open}));
-  if(ro)host.querySelectorAll('.fd-db input,.fd-db select,.fd-db textarea,.fd-db button:not(#openBoundAgent):not(#openBoundAgentValidation),.fd-dh-name,#deletePropertyNode').forEach(el=>el.disabled=true);
+  if(ro)host.querySelectorAll('.fd-db input,.fd-db select,.fd-db textarea,.fd-db button:not(#openBoundAgent):not(#openBoundAgentValidation),.fd-dh-name,#deletePropertyNode').forEach(el=>{if(!el.matches('[data-try]'))el.disabled=true});
   flowPalette.paint(host);
   const body=host.querySelector('.fd-db');if(body&&scroll)body.scrollTop=scroll;
   const refocus=focusKey&&host.querySelector(`[data-p="${focusKey}"]`);

@@ -73,6 +73,10 @@ type Server struct {
 	users           *usersHandlers // users.go
 	projects        *projectsHandlers
 	insights        *insightsHandlers
+	webhooks        *webhooksHandlers
+	cases           *casesHandlers
+	connections     *connectionsHandlers
+	audit           *auditHandlers
 	businessDomains *businessDomainsHandlers
 	catalog         *catalogHandlers  // catalog.go
 	mcp             *mcpHandlers      // mcp.go
@@ -157,6 +161,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 		catalog:         &catalogHandlers{deps: d},
 		businessDomains: &businessDomainsHandlers{deps: d},
 		insights:        &insightsHandlers{deps: d},
+		cases:           &casesHandlers{deps: d},
 		projects:        &projectsHandlers{deps: d},
 		mcp:             &mcpHandlers{deps: d},
 		market:          &marketHandlers{deps: d},
@@ -177,6 +182,10 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	e.WorkspaceActive = func(run domain.Run) bool { return api.runs.terminals.HasRunScope(run.ID) }
 	api.catalog.notifications = api.notifications
 	api.schedule.notifications = api.notifications
+	api.webhooks = &webhooksHandlers{deps: d, cases: api.cases}
+	api.connections = newConnectionsHandlers(d, api.cases)
+	api.audit = &auditHandlers{deps: d}
+	e.SetCaseService(api.cases)
 	if syncSvc != nil {
 		e.MergeIntoBranch = syncSvc.EnsureAndMergeBranchMR
 		e.FindBranchMR = syncSvc.FindBranchMR
@@ -218,6 +227,8 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 		c.JSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	})
 	g.Use(logging(), securityHeaders(), cors(), gzipMaybe())
+	// Before authentication so denied requests are recorded too.
+	g.Use(api.audit.middleware())
 	g.Use(api.tokens.userAccessAuth())
 	if basicUser != "" && basicPass != "" {
 		g.Use(basicAuth(basicUser, basicPass))
@@ -475,6 +486,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.DELETE("/api/sandboxes", api.catalog.sandboxes)
 	g.GET("/api/workflows", api.catalog.workflows)
 	g.PUT("/api/workflows", api.catalog.workflows)
+	g.POST("/api/workflow-conditions/check", api.catalog.checkCondition)
 	g.GET("/api/workflows/:id", api.catalog.workflow)
 	g.DELETE("/api/workflows/:id", api.catalog.workflow)
 	g.GET("/api/workflows/:id/revisions", api.catalog.workflow)
@@ -486,6 +498,40 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.POST("/api/workflows/:id/clone", api.catalog.workflow)
 	g.GET("/api/workflow-metrics", api.runs.workflowMetrics)
 	g.POST(insightIngestPath, api.insights.ingest)
+	g.GET("/api/alerts", api.cases.alerts)
+	g.GET("/api/alerts/:id", api.cases.alert)
+	g.POST("/api/alerts/:id/escalate", api.cases.escalateAlert)
+	g.GET("/api/cases", api.cases.cases)
+	g.POST("/api/cases", api.cases.cases)
+	g.GET("/api/cases/:id", api.cases.caseByID)
+	g.PUT("/api/cases/:id", api.cases.caseByID)
+	g.POST("/api/cases/:id/comments", api.cases.comment)
+	g.POST("/api/cases/:id/iocs", api.cases.addIOC)
+	g.POST("/api/cases/:id/runs", api.cases.runPlaybook)
+	g.GET("/api/case-triggers", api.cases.caseTriggers)
+	g.POST("/api/case-triggers", api.cases.caseTriggers)
+	g.PUT("/api/case-triggers/:id", api.cases.caseTrigger)
+	g.DELETE("/api/case-triggers/:id", api.cases.caseTrigger)
+	g.GET("/api/audit", api.audit.events)
+	g.GET("/api/audit/export", api.audit.export)
+	g.GET("/api/connectors", api.connections.connectors)
+	g.GET("/api/connectors/:id", api.connections.connectorByID)
+	g.GET("/api/connections", api.connections.connections)
+	g.POST("/api/connections", api.connections.connections)
+	g.GET("/api/connections/:id", api.connections.connection)
+	g.PUT("/api/connections/:id", api.connections.connection)
+	g.DELETE("/api/connections/:id", api.connections.connection)
+	g.POST("/api/connections/:id/test", api.connections.testConnection)
+	g.GET("/api/webhooks", api.webhooks.webhooks)
+	g.POST("/api/webhooks", api.webhooks.webhooks)
+	g.GET("/api/webhooks/:id", api.webhooks.webhook)
+	g.PUT("/api/webhooks/:id", api.webhooks.webhook)
+	g.DELETE("/api/webhooks/:id", api.webhooks.webhook)
+	g.POST("/api/webhooks/:id/rotate", api.webhooks.rotateSecret)
+	g.GET("/api/webhooks/:id/deliveries", api.webhooks.deliveries)
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodGet} {
+		g.Handle(method, webhookIngressPrefix+":id/:secret", api.webhooks.ingest)
+	}
 	g.GET("/api/insights/v1/sources", api.insights.sources)
 	g.POST("/api/insights/v1/sources", api.insights.sources)
 	g.DELETE("/api/insights/v1/sources/:id", api.insights.revokeSource)
@@ -858,7 +904,7 @@ func logging() gin.HandlerFunc {
 		start := time.Now()
 		c.Next()
 		log.Printf("[HTTP] %s %s -> %d (%d bytes, %s)",
-			c.Request.Method, redactAgentToolPath(c.Request.URL.Path),
+			c.Request.Method, redactWebhookPath(redactAgentToolPath(c.Request.URL.Path)),
 			c.Writer.Status(), c.Writer.Size(), time.Since(start).Truncate(time.Millisecond))
 	}
 }
@@ -868,7 +914,7 @@ func basicAuth(user, pass string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// The runner machine plane has its own bind/session authentication and
 		// must remain usable behind a gateway login or preview Basic Auth.
-		if c.Request.URL.Path == insightIngestPath || strings.HasPrefix(c.Request.URL.Path, "/runners/") || strings.HasPrefix(c.Request.URL.Path, "/internal/agent-tools/") {
+		if c.Request.URL.Path == insightIngestPath || strings.HasPrefix(c.Request.URL.Path, webhookIngressPrefix) || strings.HasPrefix(c.Request.URL.Path, "/runners/") || strings.HasPrefix(c.Request.URL.Path, "/internal/agent-tools/") {
 			c.Next()
 			return
 		}

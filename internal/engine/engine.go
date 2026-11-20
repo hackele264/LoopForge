@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"agentflow/internal/connector"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 
 type Engine struct {
 	repo               *repo.Store
+	actions            *connector.Executor
 	sandboxes          *runtime.Manager
 	runner             *runtime.ExecutorRunner
 	mu                 sync.Mutex
@@ -100,7 +102,7 @@ var ErrExecutionDisabled = errors.New("run execution is disabled on this instanc
 
 func New(s *repo.Store, sm *runtime.Manager) *Engine {
 	host, _ := os.Hostname()
-	e := &Engine{repo: s, sandboxes: sm, runner: runtime.NewExecutorRunner(), running: map[string]context.CancelFunc{}, runEnvs: map[string]*runEnvironment{}, workspaceFacts: map[string]domain.RunnerWorkspaceFacts{}, subs: map[string]map[chan domain.Run]struct{}{}, runnerTaskSubs: map[string]map[chan struct{}]struct{}{}, instanceID: fmt.Sprintf("%s-%d", host, os.Getpid()), workspaceHost: host, leaseTTL: 30 * time.Second, executeRuns: true, obsKick: make(chan struct{}, 1)}
+	e := &Engine{repo: s, sandboxes: sm, runner: runtime.NewExecutorRunner(), running: map[string]context.CancelFunc{}, runEnvs: map[string]*runEnvironment{}, workspaceFacts: map[string]domain.RunnerWorkspaceFacts{}, subs: map[string]map[chan domain.Run]struct{}{}, runnerTaskSubs: map[string]map[chan struct{}]struct{}{}, instanceID: fmt.Sprintf("%s-%d", host, os.Getpid()), workspaceHost: host, leaseTTL: 30 * time.Second, executeRuns: true, obsKick: make(chan struct{}, 1), actions: connector.NewExecutor(nil, nil)}
 	return e
 }
 
@@ -143,6 +145,18 @@ func (e *Engine) ConfigurePlatformMCP(baseURL, token string) {
 	defer e.mu.Unlock()
 	e.platformMCPBase = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	e.platformMCPToken = strings.TrimSpace(token)
+}
+
+// SetCaseService wires the built-in case actions of action nodes.
+func (e *Engine) SetCaseService(cases connector.CaseService) {
+	e.actions.SetCaseService(cases)
+}
+
+// SetActionExecutor replaces the connector action executor (tests).
+func (e *Engine) SetActionExecutor(x *connector.Executor) {
+	if x != nil {
+		e.actions = x
+	}
 }
 
 func (e *Engine) SetPreview(svc *preview.Service) {

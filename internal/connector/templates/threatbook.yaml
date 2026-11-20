@@ -1,0 +1,37 @@
+id: threatbook
+title: 微步在线 ThreatBook
+vendor: 微步在线
+description: 查询 IP 信誉：是否恶意、威胁类型与严重级别。
+docs: https://x.threatbook.com/v5/apiDocs
+baseUrl: https://api.threatbook.cn
+auth:
+  type: query
+  name: apikey
+  secret: api_key
+secrets:
+  - name: api_key
+    label: API Key
+    required: true
+testAction: ip_reputation
+testInputs:
+  ip: 8.8.8.8
+actions:
+  - id: ip_reputation
+    title: IP 信誉
+    category: enrichment
+    inputs:
+      - name: ip
+        label: IP 地址
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /v3/scene/ip_reputation
+      query:
+        resource: "{{ inputs.ip }}"
+    failIf: response.body.response_code != 0
+    output:
+      isMalicious: response.body.data[inputs.ip].is_malicious
+      severity: response.body.data[inputs.ip].severity
+      judgments: response.body.data[inputs.ip].judgments
+      confidenceLevel: response.body.data[inputs.ip].confidence_level

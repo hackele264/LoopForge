@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"agentflow/internal/domain"
 )
 
 const Version = "1.0.0"
@@ -57,11 +59,34 @@ var inputSchema = map[string]any{
 	},
 }
 
+// OutputConfig enables submit_output: the node declared an output schema
+// and the engine reads the submitted object from Path.
+type OutputConfig struct {
+	Path   string
+	Schema json.RawMessage
+}
+
+func (o OutputConfig) enabled() bool { return strings.TrimSpace(o.Path) != "" }
+
 // Run serves the small JSON-RPC MCP protocol over stdin/stdout.
 func Run(stdin io.Reader, stdout io.Writer, resultPath string) error {
+	return RunWithOutput(stdin, stdout, resultPath, OutputConfig{})
+}
+
+// RunWithOutput is Run with an optional submit_output tool. When output is
+// enabled, a pass decision is refused until the structured output has been
+// submitted, so a node that passes always carries its declared output.
+func RunWithOutput(stdin io.Reader, stdout io.Writer, resultPath string, output OutputConfig) error {
 	resultPath = strings.TrimSpace(resultPath)
 	if resultPath == "" {
 		return fmt.Errorf("AGENTFLOW_GATE_RESULT_PATH is required")
+	}
+	output.Path = strings.TrimSpace(output.Path)
+	if output.enabled() {
+		var schema map[string]any
+		if len(output.Schema) == 0 || json.Unmarshal(output.Schema, &schema) != nil {
+			return fmt.Errorf("AGENTFLOW_OUTPUT_SCHEMA must be a JSON object when AGENTFLOW_OUTPUT_PATH is set")
+		}
 	}
 	scanner := bufio.NewScanner(stdin)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -78,14 +103,14 @@ func Run(stdin io.Reader, stdout io.Writer, resultPath string) error {
 		if strings.HasPrefix(req.Method, "notifications/") {
 			continue
 		}
-		if err := handleRequest(encoder, req, resultPath); err != nil {
+		if err := handleRequest(encoder, req, resultPath, output); err != nil {
 			return err
 		}
 	}
 	return scanner.Err()
 }
 
-func handleRequest(encoder *json.Encoder, req request, resultPath string) error {
+func handleRequest(encoder *json.Encoder, req request, resultPath string, output OutputConfig) error {
 	switch req.Method {
 	case "initialize":
 		var params struct {
@@ -99,16 +124,24 @@ func handleRequest(encoder *json.Encoder, req request, resultPath string) error 
 			"protocolVersion": params.ProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "agentflow-gate", "version": Version},
-			"instructions":    "Call submit_gate_result exactly once to finish this node.",
+			"instructions":    instructions(output),
 		}, "")
 	case "ping":
 		return writeResponse(encoder, req.ID, map[string]any{}, "")
 	case "tools/list":
-		return writeResponse(encoder, req.ID, map[string]any{"tools": []any{map[string]any{
+		tools := []any{map[string]any{
 			"name":        "submit_gate_result",
 			"description": "Submit exactly one terminal node decision. reason explains why. human also requires actionRequired to state exactly what a person must confirm.",
 			"inputSchema": inputSchema,
-		}}}, "")
+		}}
+		if output.enabled() {
+			tools = append([]any{map[string]any{
+				"name":        "submit_output",
+				"description": "Submit this node's structured result exactly once, before submit_gate_result with decision pass. The object must match the input schema; downstream steps branch on it.",
+				"inputSchema": json.RawMessage(output.Schema),
+			}}, tools...)
+		}
+		return writeResponse(encoder, req.ID, map[string]any{"tools": tools}, "")
 	case "tools/call":
 		var params struct {
 			Name      string          `json:"name"`
@@ -117,12 +150,20 @@ func handleRequest(encoder *json.Encoder, req request, resultPath string) error 
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			return writeResponse(encoder, req.ID, nil, "invalid tool parameters")
 		}
+		if params.Name == "submit_output" && output.enabled() {
+			return submitOutput(encoder, req.ID, params.Arguments, output)
+		}
 		if params.Name != "submit_gate_result" {
 			return writeResponse(encoder, req.ID, nil, "unknown tool")
 		}
 		result, problem := decodeResult(params.Arguments)
 		if problem != "" {
 			return writeResponse(encoder, req.ID, nil, problem)
+		}
+		if output.enabled() && result.Decision == "pass" {
+			if _, err := os.Stat(output.Path); err != nil {
+				return writeResponse(encoder, req.ID, nil, "call submit_output with the structured result before submitting decision pass")
+			}
 		}
 		if err := writeResultExclusive(resultPath, result); err != nil {
 			if os.IsExist(err) {
@@ -137,6 +178,57 @@ func handleRequest(encoder *json.Encoder, req request, resultPath string) error 
 	default:
 		return writeResponse(encoder, req.ID, nil, "method not found")
 	}
+}
+
+func instructions(output OutputConfig) string {
+	if output.enabled() {
+		return "Call submit_output once with the node's structured result, then call submit_gate_result exactly once to finish this node."
+	}
+	return "Call submit_gate_result exactly once to finish this node."
+}
+
+// submitOutput validates the structured output against the node schema and
+// writes it once. A rejected object is not written, so the agent can fix and
+// resubmit; an accepted one cannot be replaced.
+func submitOutput(encoder *json.Encoder, id json.RawMessage, raw json.RawMessage, output OutputConfig) error {
+	data, err := domain.ValidateNodeOutput(output.Schema, raw)
+	if err != nil {
+		return writeResponse(encoder, id, nil, err.Error())
+	}
+	if err := writeBytesExclusive(output.Path, []byte(data)); err != nil {
+		if os.IsExist(err) {
+			return writeResponse(encoder, id, nil, "structured output already submitted")
+		}
+		return writeResponse(encoder, id, nil, err.Error())
+	}
+	return writeResponse(encoder, id, map[string]any{
+		"content": []any{map[string]any{"type": "text", "text": "Structured output submitted. Now call submit_gate_result."}},
+		"isError": false,
+	}, "")
+}
+
+func writeBytesExclusive(path string, data []byte) (err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+		if !ok {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err = file.Write(data); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }
 
 func decodeResult(raw json.RawMessage) (gateResult, string) {

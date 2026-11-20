@@ -276,4 +276,10 @@ type APIToken struct {
 	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+	// Scopes limits what the token may change; empty keeps the legacy full
+	// access of its owner. See TokenScopes.
+	Scopes []string `json:"scopes,omitempty"`
+	// ProjectIDs limits the token to these projects; empty means every
+	// project its owner can reach.
+	ProjectIDs []string `json:"projectIds,omitempty"`
 }

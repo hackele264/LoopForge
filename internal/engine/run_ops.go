@@ -137,7 +137,15 @@ func (e *Engine) Pause(runID string) error {
 	return nil
 }
 
+// Approve approves a waiting node without a recorded actor. HTTP callers use
+// ApproveAs so the decision is attributed.
 func (e *Engine) Approve(runID, nodeID, humanContext string, expected ...NodeExpectation) error {
+	return e.ApproveAs(runID, nodeID, humanContext, domain.Actor{}, expected...)
+}
+
+// ApproveAs approves a waiting node on behalf of actor, enforcing the node's
+// approver policy and recording who decided.
+func (e *Engine) ApproveAs(runID, nodeID, humanContext string, actor domain.Actor, expected ...NodeExpectation) error {
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
 	r, ok := e.repo.RunState(runID)
@@ -164,18 +172,32 @@ func (e *Engine) Approve(runID, nodeID, humanContext string, expected ...NodeExp
 	if n == nil || n.Status != "waiting_approval" {
 		return fmt.Errorf("node is not waiting for approval")
 	}
+	if err := e.authorizeDecision(r, nodeID, actor); err != nil {
+		return err
+	}
+	if err := e.authorizeResponseRelease(r, nodeID, actor); err != nil {
+		return err
+	}
 	n.Status = "succeeded"
 	n.FinishedAt = time.Now().UTC()
+	recordDecision(n, actor)
 	note := recordHumanContext(&r, nodeID, "人工批准继续", humanContext)
 	decision := "# Approval\n\nApproved by a human gate.\n"
+	if byline := decisionByline(actor); byline != "" {
+		decision += "\n" + byline + "\n"
+	}
 	if note != "" {
 		decision += "\n" + note + "\n"
 	}
 	appendArtifact(&r, nodeID, n.Attempt, "decision", "decision.md", "text/markdown", []byte(decision))
-	e.event(&r, nodeID, "gate.approved", "人工门禁已通过")
+	e.eventBy(&r, nodeID, "gate.approved", "人工门禁已通过", actor)
 	appendControlTelemetry(&r, nodeID, "gate.approved", "人工门禁已通过")
 	r.Status = "running"
-	return e.persistControlDecision(runID, r, expected...)
+	if err := e.persistControlDecision(runID, r, expected...); err != nil {
+		return err
+	}
+	e.recordCaseDecision(r, nodeID, "批准", humanContext, actor)
+	return nil
 }
 
 // Pass marks a failed (or paused) node as succeeded so downstream can
@@ -184,14 +206,19 @@ func (e *Engine) Approve(runID, nodeID, humanContext string, expected ...NodeExp
 // mid-execution and retrying from scratch won't help (e.g. an environment
 // problem) — hard scripts can otherwise stall a run forever.
 func (e *Engine) Pass(runID, nodeID, humanContext string, expected ...NodeExpectation) error {
-	if err := e.pass(runID, nodeID, humanContext, expected...); err != nil {
+	return e.PassAs(runID, nodeID, humanContext, domain.Actor{}, expected...)
+}
+
+// PassAs is Pass with the deciding actor recorded.
+func (e *Engine) PassAs(runID, nodeID, humanContext string, actor domain.Actor, expected ...NodeExpectation) error {
+	if err := e.pass(runID, nodeID, humanContext, actor, expected...); err != nil {
 		return err
 	}
 	e.resumeParentAfterChildRecovery(runID)
 	return nil
 }
 
-func (e *Engine) pass(runID, nodeID, humanContext string, expected ...NodeExpectation) error {
+func (e *Engine) pass(runID, nodeID, humanContext string, actor domain.Actor, expected ...NodeExpectation) error {
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
 	r, ok := e.repo.RunState(runID)
@@ -247,7 +274,9 @@ func (e *Engine) pass(runID, nodeID, humanContext string, expected ...NodeExpect
 		return fmt.Errorf("only a failed script node can be passed")
 	}
 	n.Status = "succeeded"
+	n.ErrorRouted = false
 	n.FinishedAt = time.Now().UTC()
+	recordDecision(n, actor)
 	n.Activity = "人工通过，未重新执行"
 	note := recordHumanContext(&r, nodeID, "人工通过该节点，继续下游", humanContext)
 	decisionReason := "after the node failed"
@@ -259,7 +288,7 @@ func (e *Engine) pass(runID, nodeID, humanContext string, expected ...NodeExpect
 		decision += "\n" + note + "\n"
 	}
 	appendArtifact(&r, nodeID, n.Attempt, "decision", "decision.md", "text/markdown", []byte(decision))
-	e.event(&r, nodeID, "node.passed", "人工通过该节点，继续下游")
+	e.eventBy(&r, nodeID, "node.passed", "人工通过该节点，继续下游", actor)
 	appendControlTelemetry(&r, nodeID, "node.passed", "人工通过该节点，继续下游")
 	r.CancelRequested = false
 	r.PauseRequested = false
@@ -269,6 +298,13 @@ func (e *Engine) pass(runID, nodeID, humanContext string, expected ...NodeExpect
 }
 
 func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...NodeExpectation) error {
+	return e.RejectAs(runID, req, domain.Actor{}, expected...)
+}
+
+// RejectAs sends a run back to req.TargetID (or the node's RejectTo) on
+// behalf of actor, enforcing the deciding node's approver policy when the
+// node is a waiting human gate.
+func (e *Engine) RejectAs(runID string, req domain.RejectRequest, actor domain.Actor, expected ...NodeExpectation) error {
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
 	r, ok := e.repo.RunState(runID)
@@ -290,6 +326,12 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
 	}
 	if err := forbidClosedGongfengIssue(e.repo, r); err != nil {
 		return err
+	}
+	if nr := r.Nodes[req.NodeID]; nr != nil && nr.Status == "waiting_approval" {
+		if err := e.authorizeDecision(r, req.NodeID, actor); err != nil {
+			return err
+		}
+		recordDecision(nr, actor)
 	}
 	wf := workflowForRun(e.repo, r)
 	target := req.TargetID
@@ -329,6 +371,7 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
 			nr.Status = "pending"
 			nr.Error = ""
 			nr.Output = ""
+			nr.ResetBranchState()
 			nr.ChildRunID = ""
 			nr.FinishedAt = time.Time{}
 			if id == target {
@@ -339,13 +382,14 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
 			}
 		}
 	}
-	e.event(&r, req.NodeID, "gate.rejected", fmt.Sprintf("打回到 %s：%s", target, req.Reason))
+	e.eventBy(&r, req.NodeID, "gate.rejected", fmt.Sprintf("打回到 %s：%s", target, req.Reason), actor)
 	appendControlTelemetry(&r, req.NodeID, "gate.rejected", fmt.Sprintf("打回到 %s：%s", target, req.Reason))
 	r.Status = "running"
 	e.cancelLiveChildRuns(stale)
 	if err := e.persistControlDecision(runID, r, expected...); err != nil {
 		return err
 	}
+	e.recordCaseDecision(r, req.NodeID, "打回", req.Reason, actor)
 	e.cancelNodeExecutions(runID, interrupted)
 	return nil
 }
@@ -587,6 +631,7 @@ func (e *Engine) retryContext(ctx context.Context, runID, nodeID, reason, humanC
 			nr.Status = "pending"
 			nr.Error = ""
 			nr.Output = ""
+			nr.ResetBranchState()
 			nr.ChildRunID = ""
 			if id == nodeID {
 				nr.ChildRunID = keepChildRunID
@@ -886,6 +931,7 @@ func resumeUnpausedGraph(r *domain.Run) (bool, error) {
 			return false, nil
 		}
 	}
+	settleBranches(wf, r)
 	ready := readyNodes(wf, *r)
 	r.CancelRequested = false
 	r.PauseRequested = false
@@ -1006,7 +1052,7 @@ func resumeNodeID(r domain.Run) string {
 		}
 	}
 	for _, id := range order {
-		if nr := r.Nodes[id]; nr != nil && (nr.Status == "cancelled" || nr.Status == "failed") {
+		if nr := r.Nodes[id]; nr != nil && (nr.Status == "cancelled" || (nr.Status == "failed" && !nr.ErrorRouted)) {
 			return id
 		}
 	}
@@ -1017,7 +1063,7 @@ func resumeNodeID(r domain.Run) string {
 	// 兜底：选第一个尚未成功的节点（例如取消/中断后仍停留在 running 的节点）。
 	// 这样即便历史遗留的 run 节点状态未收敛，也能定位到续跑目标，避免返回空。
 	for _, id := range order {
-		if nr := r.Nodes[id]; nr != nil && nr.Status != "succeeded" {
+		if nr := r.Nodes[id]; nr != nil && !nr.SettledOK() {
 			return id
 		}
 	}

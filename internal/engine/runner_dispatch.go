@@ -206,10 +206,15 @@ func (e *Engine) dispatchRunnerTask(ctx context.Context, runnerID string, run do
 		HumanContext:                  run.HumanContext,
 		CredentialSource:              authMode,
 		GateResultPath:                options.GateResultPath,
+		OutputPath:                    options.OutputPath,
+		OutputSchema:                  options.OutputSchema,
 		RepositoryPreparationFallback: firstRepositoryAgent(run.WorkflowSnapshot, node),
 	}
 	if strings.TrimSpace(options.GateResultPath) != "" {
 		invocation.Artifacts = append(invocation.Artifacts, gateResultContract(options.GateResultPath))
+	}
+	if strings.TrimSpace(options.OutputPath) != "" {
+		invocation.Artifacts = append(invocation.Artifacts, agentOutputContract(options.OutputPath))
 	}
 	if authMode == domain.RuntimeAuthPersonal {
 		switch ex.Kind {
@@ -252,6 +257,9 @@ func (e *Engine) dispatchRunnerTask(ctx context.Context, runnerID string, run do
 		invocation.Inputs = reported.inputs
 		invocation.OutputFiles = artifactOutputFiles(run, node)
 		if path := strings.TrimSpace(options.GateResultPath); path != "" {
+			invocation.OutputFiles = append(invocation.OutputFiles, path)
+		}
+		if path := strings.TrimSpace(options.OutputPath); path != "" {
 			invocation.OutputFiles = append(invocation.OutputFiles, path)
 		}
 		invocation.RecoverOutputs = normalizeExecutionScope(node.ExecutionScope) != domain.ExecutionScopeRepositories
@@ -522,7 +530,7 @@ func (e *Engine) validateExecutionReconnect(run domain.Run, nodeID string) error
 			continue
 		}
 		provider := "terminal"
-		if node.Type != "script" && node.Type != "command" && node.Type != "approval" {
+		if node.Type != "script" && node.Type != "command" && node.Type != "approval" && node.Type != "action" {
 			agent, found := e.repo.Agent(node.AgentID)
 			if !found {
 				return fmt.Errorf("无法重连原执行环境：agent %s 不存在", node.AgentID)

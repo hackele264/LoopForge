@@ -38,6 +38,9 @@ func (r *ExecutorRunner) Run(ctx context.Context, sb Sandbox, invocationID strin
 			if writeErr := writeMockGateResult(sb.Workspace(), options.GateResultPath, agent); writeErr != nil {
 				return result, writeErr
 			}
+			if writeErr := writeMockOutput(sb.Workspace(), options, agent); writeErr != nil {
+				return result, writeErr
+			}
 			if sink != nil {
 				success := true
 				sessionID := strings.TrimSpace(options.ResumeSessionID)
@@ -188,6 +191,9 @@ func (r *ExecutorRunner) PrepareRemote(workspace string, inv RemoteInvocation) (
 	if result, handled, err := provider.RunBuiltin(context.Background(), inv.Agent, inv.Prompt, nil); handled {
 		if err == nil && mockShouldSubmitGate(workspace, inv.Agent, inv.Options) {
 			if writeErr := writeMockGateResult(workspace, inv.Options.GateResultPath, inv.Agent); writeErr != nil {
+				return nil, writeErr
+			}
+			if writeErr := writeMockOutput(workspace, inv.Options, inv.Agent); writeErr != nil {
 				return nil, writeErr
 			}
 		}

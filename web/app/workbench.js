@@ -1328,6 +1328,7 @@ const PLATFORM_TABS=[
   {id:'accounts',zh:'成员账号',en:'Accounts'},
   {id:'admins',zh:'平台管理员',en:'Admins'},
   {id:'sharedKey',zh:'共享 CodeBuddy Key',en:'Shared CodeBuddy Key'},
+  {id:'audit',zh:'审计日志',en:'Audit log'},
 ];
 function platformTabsHTML(active){
   return `<div class="pa-tabs-wrap platform-tabs-wrap"><div class="pa-tabs platform-tabs" id="platformTabs" role="tablist" aria-label="平台管理分区">${PLATFORM_TABS.map(t=>{
@@ -1496,8 +1497,10 @@ function renderPlatformAdminPanel(){
     </div>
     `)}
     ${platformTabPanel('sharedKey',tab,platformSharedKeyHTML())}
+    ${platformTabPanel('audit',tab,'<div id="platformAuditHost"></div>')}
   `;
   bindPlatformTabs(host);
+  if(typeof loadPlatformAudit==='function')loadPlatformAudit();
   loadPlatformAccounts(host);
   loadPlatformSharedKey(host);
   loadPlatformAdmins(host);

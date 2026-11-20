@@ -159,6 +159,14 @@ func (h issuesHandlers) issues(c *gin.Context) {
 			Q:         strings.TrimSpace(c.Query("q")),
 			Assignee:  strings.TrimSpace(c.Query("assignee")),
 		})
+		readable := h.projectReadFilter(r)
+		kept := items[:0]
+		for _, item := range items {
+			if readable(item.ProjectID) {
+				kept = append(kept, item)
+			}
+		}
+		items = kept
 		if _, ok := c.GetQuery("limit"); !ok {
 			views, err := h.issueDeletionViews(items)
 			if err != nil {
@@ -465,6 +473,10 @@ func (h issuesHandlers) issue(c *gin.Context) {
 	route, ok := issueRoutes[c.FullPath()]
 	if !ok || !slices.Contains(route.methods, c.Request.Method) {
 		http.NotFound(c.Writer, c.Request)
+		return
+	}
+	if c.Request.Method == http.MethodGet && !h.projectReadable(c.Request, issue.ProjectID) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "只有项目成员可以查看该工作项"})
 		return
 	}
 	if c.Request.Method != http.MethodGet && !h.requireProjectWriter(c, issue.ProjectID) {

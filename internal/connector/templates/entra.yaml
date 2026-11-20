@@ -1,0 +1,81 @@
+id: entra
+title: Microsoft Entra ID
+vendor: Microsoft
+description: 通过 Microsoft Graph 查询用户、禁用或启用账号、吊销登录会话。需要应用权限 User.Read.All，处置动作还需要 User.ReadWrite.All（或 User.RevokeSessions.All）。
+docs: https://learn.microsoft.com/graph/api/resources/user
+baseUrl: https://graph.microsoft.com
+auth:
+  type: oauth2_client_credentials
+  tokenUrl: https://login.microsoftonline.com/{{ params.tenant_id }}/oauth2/v2.0/token
+  scope: https://graph.microsoft.com/.default
+  clientId: client_id
+  clientSecret: client_secret
+params:
+  - name: tenant_id
+    label: 租户 ID
+    required: true
+secrets:
+  - name: client_id
+    label: 应用（客户端）ID
+    required: true
+  - name: client_secret
+    label: 客户端密钥
+    required: true
+actions:
+  - id: get_user
+    title: 查询用户
+    category: enrichment
+    inputs:
+      - name: user
+        label: 用户 ID 或 UPN
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /v1.0/users/{{ inputs.user }}
+      query:
+        $select: id,displayName,userPrincipalName,accountEnabled,department,jobTitle
+    output:
+      id: response.body.id
+      displayName: response.body.displayName
+      userPrincipalName: response.body.userPrincipalName
+      accountEnabled: response.body.accountEnabled
+      department: response.body.department
+  - id: disable_user
+    title: 禁用账号
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或 UPN
+        type: string
+        required: true
+    request:
+      method: PATCH
+      path: /v1.0/users/{{ inputs.user }}
+      body:
+        accountEnabled: false
+  - id: enable_user
+    title: 启用账号
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或 UPN
+        type: string
+        required: true
+    request:
+      method: PATCH
+      path: /v1.0/users/{{ inputs.user }}
+      body:
+        accountEnabled: true
+  - id: revoke_sessions
+    title: 吊销登录会话
+    description: 使该用户所有刷新令牌和会话失效，用户需重新登录。
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或 UPN
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /v1.0/users/{{ inputs.user }}/revokeSignInSessions

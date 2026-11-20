@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -90,8 +91,13 @@ type InvocationOptions struct {
 	NodeID          string
 	ResumeSessionID string
 	GateResultPath  string
-	Repositories    []domain.RepositoryContext
-	RunnerLogin     bool
+	// OutputPath / OutputSchema enable the gate MCP's submit_output tool for
+	// agent nodes that declare structured output. OutputPath is relative to
+	// the workspace, like GateResultPath.
+	OutputPath   string
+	OutputSchema json.RawMessage
+	Repositories []domain.RepositoryContext
+	RunnerLogin  bool
 	// BrowserMCP is resolved on the executing host, never sent to a runner.
 	BrowserMCP *domain.MCPServerDefinition `json:"-"`
 }

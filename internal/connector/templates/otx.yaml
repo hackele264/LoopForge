@@ -1,0 +1,59 @@
+id: otx
+title: AlienVault OTX
+vendor: LevelBlue (AlienVault)
+description: 查询 IP、域名和文件哈希关联的 OTX 威胁情报脉冲（pulse）。
+docs: https://otx.alienvault.com/api
+baseUrl: https://otx.alienvault.com
+auth:
+  type: header
+  name: X-OTX-API-KEY
+  secret: api_key
+secrets:
+  - name: api_key
+    label: API Key
+    required: true
+testAction: ip_general
+testInputs:
+  ip: 8.8.8.8
+actions:
+  - id: ip_general
+    title: IP 情报
+    category: enrichment
+    inputs:
+      - name: ip
+        label: IPv4 地址
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/v1/indicators/IPv4/{{ inputs.ip }}/general
+    output:
+      pulseCount: response.body.pulse_info.count
+      reputation: response.body.reputation
+      country: response.body.country_name
+  - id: domain_general
+    title: 域名情报
+    category: enrichment
+    inputs:
+      - name: domain
+        label: 域名
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/v1/indicators/domain/{{ inputs.domain }}/general
+    output:
+      pulseCount: response.body.pulse_info.count
+  - id: file_general
+    title: 文件哈希情报
+    category: enrichment
+    inputs:
+      - name: hash
+        label: 哈希
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/v1/indicators/file/{{ inputs.hash }}/general
+    output:
+      pulseCount: response.body.pulse_info.count

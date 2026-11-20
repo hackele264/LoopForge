@@ -1276,7 +1276,7 @@ func validateAssistantDraft(d *assistantDraft, projectID string) error {
 			return errors.New("invalid workflow")
 		}
 		for _, n := range w.Nodes {
-			if n.Type != "agent" && n.Type != "script" && n.Type != "command" && n.Type != "approval" && n.Type != "sop" {
+			if n.Type != "agent" && n.Type != "script" && n.Type != "command" && n.Type != "approval" && n.Type != "sop" && n.Type != "action" {
 				return errors.New("unsupported node")
 			}
 		}

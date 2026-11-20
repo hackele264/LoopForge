@@ -177,6 +177,8 @@ html[data-theme="dark"] #flowView{
 #flowView .fd-tile{--tint:var(--fd-accent);display:grid;place-items:center;width:30px;height:30px;border-radius:8px;flex:none;background:rgb(var(--tint) / .12);color:rgb(var(--tint));font:700 13px/1 inherit}
 #flowView .fd-tile.t-script{--tint:139 92 246}
 #flowView .fd-tile.t-sop{--tint:14 165 233}
+#flowView .fd-tile.t-action{--tint:234 88 12}
+#flowView .fd-req{color:rgb(220 38 38)}
 #flowView .fd-tile.t-preview{--tint:217 119 6}
 #flowView .fd-tile.t-approval{--tint:16 163 127}
 
@@ -478,3 +480,54 @@ html[data-theme="dark"] #aiOrchestrator :is([data-cli="codex"],[data-cli="claude
 @media (prefers-reduced-motion:reduce){
   #flowView *,#flowView *::before,#flowView *::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
 }
+
+/* conditional workflows: error branches, conditions, skipped runs */
+#flowView .fd-out.er::before{content:"";width:6px;height:6px;border-radius:50%;margin-right:6px;background:rgb(var(--fd-warn))}
+#flowView .fd-out.er .fd-port{background:rgb(var(--fd-warn))}
+#flowView .fd-edges .fd-e.er .fd-e-path{stroke:rgb(var(--fd-warn) / .85);marker-end:url(#fdArrowError)}
+#flowView .fd-edges .fd-e.er:hover .fd-e-path{stroke:rgb(var(--fd-warn));marker-end:url(#fdArrowError)}
+#flowView .fd-edges .fd-arrow.er{stroke:rgb(var(--fd-warn))}
+#flowView .fd-edges .fd-e-label.er rect{stroke:rgb(var(--fd-warn) / .45)}
+#flowView .fd-edges .fd-e-label.er text{fill:rgb(var(--fd-warn))}
+#flowView .fd-edges .fd-e-temp.er{stroke:rgb(var(--fd-warn))}
+#flowView .fd-legend i.er{border-top:2px solid rgb(var(--fd-warn))}
+#flowView .fd-status.s-skipped{background:var(--fd-soft);color:var(--fd-ink-4)}
+#flowView .fd-node.s-skipped{opacity:.55;border-style:dashed}
+#flowView .fd-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+#flowView .prop-hint.fd-hint-err{color:rgb(var(--fd-rj))}
+#flowView .fd-checks{display:flex;flex-wrap:wrap;gap:4px 14px;margin-bottom:8px}
+#flowView .fd-try{margin:-4px 0 12px;border:1px solid var(--fd-line);border-radius:8px;padding:0 10px}
+#flowView .fd-try>summary{cursor:pointer;padding:8px 0;font-size:12.5px;color:var(--fd-ink-2)}
+#flowView .fd-try[open]>summary{border-bottom:1px solid var(--fd-line);margin-bottom:10px}
+#flowView .fd-try-row{display:flex;align-items:center;gap:10px;margin:0 0 10px}
+#flowView .fd-try-result{font-size:12px;color:var(--fd-ink-3)}
+#flowView .fd-try-result.good{color:rgb(var(--fd-ok))}
+#flowView .fd-try-result.bad{color:rgb(var(--fd-rj))}
+
+/* webhook triggers in the flow settings drawer */
+#flowView .webhook-card{border:1px solid var(--fd-line);border-radius:10px;padding:10px 12px;margin:0 0 10px;background:var(--fd-surface)}
+#flowView .webhook-card.off{opacity:.7}
+#flowView .webhook-card-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#flowView .webhook-card-head code{margin-left:auto;font-size:11.5px;color:var(--fd-ink-3)}
+#flowView .webhook-pill{font-size:11px;padding:1px 7px;border-radius:5px;background:var(--fd-soft);color:var(--fd-ink-3)}
+#flowView .webhook-card:not(.off) .webhook-pill{background:rgb(var(--fd-ok) / .12);color:rgb(var(--fd-ok))}
+#flowView .webhook-facts{margin:6px 0 8px;font-size:12px;color:var(--fd-ink-3)}
+#flowView .webhook-actions{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+#flowView .webhook-actions .danger{color:rgb(var(--fd-rj))}
+#flowView .webhook-form{display:grid;gap:10px;margin:10px 0;padding:10px 0;border-top:1px dashed var(--fd-line)}
+#flowView .webhook-form .field{display:grid;gap:4px;font-size:12px;color:var(--fd-ink-3)}
+#flowView .webhook-form .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+#flowView .webhook-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#flowView .webhook-row .webhook-narrow{max-width:160px}
+#flowView .webhook-methods{display:flex;align-items:center;gap:12px;font-size:12px;color:var(--fd-ink-3)}
+#flowView .webhook-form-error{min-height:0;margin:0;color:rgb(var(--fd-rj));font-size:12px}
+#flowView .webhook-reveal{border:1px solid rgb(var(--fd-warn) / .5);background:rgb(var(--fd-warn) / .08);border-radius:10px;padding:10px 12px;margin:0 0 10px;display:grid;gap:8px;font-size:12.5px}
+#flowView .webhook-url{display:flex;gap:8px;align-items:center}
+#flowView .webhook-url code{flex:1;min-width:0;overflow-wrap:anywhere;font-size:11.5px}
+#flowView .webhook-reveal pre{white-space:pre-wrap;font-size:11.5px;margin:6px 0 0}
+#flowView .webhook-deliveries{display:grid;gap:4px;margin-top:8px;max-height:260px;overflow:auto}
+#flowView .webhook-delivery{display:grid;grid-template-columns:150px 110px 36px 90px 1fr;gap:6px;align-items:center;font-size:11.5px;color:var(--fd-ink-3)}
+#flowView .webhook-delivery b{font-weight:600;color:var(--fd-ink-2)}
+#flowView .webhook-delivery.started b{color:rgb(var(--fd-ok))}
+#flowView .webhook-delivery.rejected b,#flowView .webhook-delivery.failed b{color:rgb(var(--fd-rj))}
+#flowView .webhook-delivery small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -47,7 +47,7 @@ type WorkflowNode struct {
 	PlanItemID   string   `json:"planItemId,omitempty"`
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
-	Type         string   `json:"type"` // agent, script, approval, sop
+	Type         string   `json:"type"` // agent, script, approval, sop, action
 	// MetricStage explicitly assigns this node's execution time to a Loop phase.
 	// Empty means a legacy workflow without a classification; "none" opts out.
 	MetricStage string `json:"metricStage,omitempty"` // clarification, development, testing, none
@@ -56,27 +56,94 @@ type WorkflowNode struct {
 	// SOPWorkflowID is the referenced workflow when Type is "sop".
 	SOPWorkflowID string `json:"sopWorkflowId,omitempty"`
 	// RunOnWorkspaceRebuild replays this script when restoring an already-used environment.
-	RunOnWorkspaceRebuild bool               `json:"runOnWorkspaceRebuild,omitempty"`
-	ScriptLanguage        string             `json:"scriptLanguage,omitempty"` // shell, python
-	Script                string             `json:"script,omitempty"`
+	RunOnWorkspaceRebuild bool   `json:"runOnWorkspaceRebuild,omitempty"`
+	ScriptLanguage        string `json:"scriptLanguage,omitempty"` // shell, python
+	Script                string `json:"script,omitempty"`
 	// CredentialEnv requests platform-managed credentials as environment
 	// variables for script and verification commands: each entry maps an
 	// environment variable name to a credential kind (a RunCredentials.Extra
 	// key registered by the deployment). A declared credential the
 	// responsible user has not saved fails the node up front; the secret
 	// itself never appears in workflow definitions, node configs or logs.
-	CredentialEnv  map[string]string `json:"credentialEnv,omitempty"`
-	ExecutionScope string            `json:"executionScope,omitempty"` // run, repositories; empty = run
-	Command               string             `json:"command,omitempty"`        // legacy command-node payload
-	ArtifactOutputs       []ArtifactContract `json:"artifactOutputs,omitempty"`
-	RejectTo              string             `json:"rejectTo,omitempty"`
-	OnFailure             string             `json:"onFailure,omitempty"`     // fail, reject
-	RetryStrategy         string             `json:"retryStrategy,omitempty"` // targeted_fix, full_redo
-	CarryOver             []string           `json:"carryOver,omitempty"`
-	MaxAttempts           int                `json:"maxAttempts"`
-	MaxReworks            int                `json:"maxReworks"`
-	Notifications         []NodeNotification `json:"notifications,omitempty"`
-	Position              Position           `json:"position"`
+	CredentialEnv   map[string]string  `json:"credentialEnv,omitempty"`
+	ExecutionScope  string             `json:"executionScope,omitempty"` // run, repositories; empty = run
+	Command         string             `json:"command,omitempty"`        // legacy command-node payload
+	ArtifactOutputs []ArtifactContract `json:"artifactOutputs,omitempty"`
+	RejectTo        string             `json:"rejectTo,omitempty"`
+	OnFailure       string             `json:"onFailure,omitempty"`     // fail, reject
+	RetryStrategy   string             `json:"retryStrategy,omitempty"` // targeted_fix, full_redo
+	CarryOver       []string           `json:"carryOver,omitempty"`
+	MaxAttempts     int                `json:"maxAttempts"`
+	MaxReworks      int                `json:"maxReworks"`
+	Notifications   []NodeNotification `json:"notifications,omitempty"`
+	Position        Position           `json:"position"`
+	// RunIf is a read-only boolean expression evaluated by the engine once the
+	// node's incoming edges allow it to run. Empty means always run; false
+	// marks the node skipped. See internal/engine/expr.
+	RunIf string `json:"runIf,omitempty"`
+	// Join decides how incoming edges combine: "all" (default, every incoming
+	// edge must be taken) or "any" (the first taken edge starts the node).
+	Join string `json:"join,omitempty"`
+	// OutputSchema optionally declares the JSON object a node publishes as its
+	// structured output (NodeRun.Data) for downstream RunIf expressions.
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
+	// Approvers restricts who may decide an approval node. Nil keeps the
+	// legacy rule: any project writer may decide.
+	Approvers *ApproverPolicy `json:"approvers,omitempty"`
+	// Action configures an action node: a connector action the platform runs
+	// itself, outside any sandbox. See internal/connector.
+	Action *NodeAction `json:"action,omitempty"`
+}
+
+// NodeAction names the connector action an action node runs and how its
+// inputs are filled. Input values are templates: "{{ expr }}" parts are
+// evaluated against the run (trigger, nodes, run) like RunIf; a value that is
+// exactly one "{{ expr }}" keeps the expression's type.
+type NodeAction struct {
+	Connector    string            `json:"connector"`
+	Action       string            `json:"action"`
+	ConnectionID string            `json:"connectionId,omitempty"`
+	Inputs       map[string]string `json:"inputs,omitempty"`
+}
+
+// Join strategies for WorkflowNode.Join.
+const (
+	JoinAll = "all"
+	JoinAny = "any"
+)
+
+// Edge conditions for WorkflowEdge.When. Empty is treated as success.
+const (
+	EdgeWhenSuccess = "success"
+	EdgeWhenError   = "error"
+)
+
+// ApproverPolicy names who may decide an approval node: listed users, or
+// users holding one of the listed roles ("owner", "member", "admin").
+type ApproverPolicy struct {
+	UserIDs []int64  `json:"userIds,omitempty"`
+	Roles   []string `json:"roles,omitempty"`
+}
+
+// Empty reports whether the policy restricts nobody.
+func (p *ApproverPolicy) Empty() bool {
+	return p == nil || (len(p.UserIDs) == 0 && len(p.Roles) == 0)
+}
+
+// EdgeWhen normalises an edge condition; unknown values read as success.
+func EdgeWhen(e WorkflowEdge) string {
+	if strings.EqualFold(strings.TrimSpace(e.When), EdgeWhenError) {
+		return EdgeWhenError
+	}
+	return EdgeWhenSuccess
+}
+
+// NodeJoin normalises a node join strategy.
+func NodeJoin(n WorkflowNode) string {
+	if strings.EqualFold(strings.TrimSpace(n.Join), JoinAny) {
+		return JoinAny
+	}
+	return JoinAll
 }
 
 // ValidateWorkflowMetricStages prevents silently dropping a mistyped stage.
@@ -104,7 +171,7 @@ type WorkflowEdge struct {
 	ID     string `json:"id"`
 	Source string `json:"source"`
 	Target string `json:"target"`
-	When   string `json:"when"` // success
+	When   string `json:"when"` // success (default), error
 }
 
 // DefinitionRevision is an immutable snapshot of a workflow or agent so

@@ -55,9 +55,22 @@ func (h *tokenHandlers) userAccessAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		ctx := c.Request.Context()
 		if ok {
-			c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), requestUserContextKey{}, user))
+			ctx = context.WithValue(ctx, requestUserContextKey{}, user)
 		}
+		if token, isToken := h.requestToken(c.Request); isToken {
+			// A scoped token only makes the changes its scopes name. MCP tool
+			// calls are re-dispatched through this middleware with the same
+			// context, so each tool is checked as its own request.
+			if need := domain.RequiredTokenScope(c.Request.Method, c.Request.URL.Path); !token.HasScope(need) {
+				c.JSON(http.StatusForbidden, map[string]string{"error": "API Token 缺少权限 " + need})
+				c.Abort()
+				return
+			}
+			ctx = context.WithValue(ctx, requestTokenContextKey{}, token)
+		}
+		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}
 }
@@ -65,6 +78,10 @@ func (h *tokenHandlers) userAccessAuth() gin.HandlerFunc {
 func protectedAccessPath(path string) bool {
 	// Ingestion always checks its own project-scoped credential.
 	if path == insightIngestPath {
+		return false
+	}
+	// Webhook ingress authenticates with the secret in its own URL.
+	if strings.HasPrefix(path, webhookIngressPrefix) {
 		return false
 	}
 	if path == "/mcp" {
@@ -90,6 +107,20 @@ func protectedAccessPath(path string) bool {
 	}
 }
 
+// requestActor attributes a human control action (approve, reject, pass) to
+// the signed-in user or the owner of the presented API token. A request that
+// passed authentication without a user identity is a service caller.
+func (d deps) requestActor(r *http.Request) domain.Actor {
+	if user, ok := d.requestUser(r, true); ok && user != nil && user.ID > 0 {
+		actor := domain.Actor{UserID: user.ID, Kind: domain.ActorUser, Login: user.LoginName}
+		if token, isToken := d.requestToken(r); isToken {
+			actor.TokenID = token.ID
+		}
+		return actor
+	}
+	return domain.Actor{Kind: domain.ActorService}
+}
+
 // requestUser 挂 deps（token 鉴权与多个领域共用）。It resolves a signed
 // browser session or a user API token. Gateway identity headers are resolved
 // by authCurrent, which exchanges them for the signed HttpOnly browser cookie.
@@ -98,9 +129,8 @@ func (d deps) requestUser(r *http.Request, allowBearer bool) (*auth.User, bool) 
 		return current, true
 	}
 	if allowBearer {
-		if raw, ok := bearerToken(r); ok {
-			sum := sha256.Sum256([]byte(raw))
-			token, valid := d.repo.ActiveAPITokenByHash(hex.EncodeToString(sum[:]), time.Now().UTC())
+		if _, ok := bearerToken(r); ok {
+			token, valid := d.requestToken(r)
 			if valid {
 				if stored, exists := d.repo.User(token.UserID); exists {
 					return domainUserToAuth(stored), true
@@ -191,6 +221,11 @@ func (d deps) isPlatformAdmin(r *http.Request) bool {
 	if !ok || user == nil {
 		return false
 	}
+	// A scoped or project-limited token never carries its owner's platform
+	// administration unless it was granted the admin scope.
+	if token, isToken := d.requestToken(r); isToken && (!token.HasScope(domain.TokenScopeAdmin) || token.ProjectRestricted()) {
+		return false
+	}
 	if d.repo != nil {
 		return d.repo.IsPlatformAdmin(user.LoginName)
 	}
@@ -221,8 +256,10 @@ func (h *tokenHandlers) authTokens(c *gin.Context) {
 		c.JSON(http.StatusOK, h.repo.APITokens(user.ID))
 	case http.MethodPost:
 		var input struct {
-			Name          string `json:"name"`
-			ExpiresInDays int    `json:"expiresInDays"`
+			Name          string   `json:"name"`
+			ExpiresInDays int      `json:"expiresInDays"`
+			Scopes        []string `json:"scopes"`
+			ProjectIDs    []string `json:"projectIds"`
 		}
 		if !decode(c, &input) {
 			return
@@ -244,6 +281,11 @@ func (h *tokenHandlers) authTokens(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": "有效期必须在 1 到 365 天之间"})
 			return
 		}
+		scopes, projects, problem := h.tokenGrantInput(c, user, input.Scopes, input.ProjectIDs)
+		if problem != "" {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": problem})
+			return
+		}
 		plain, err := newAPIToken()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": "生成 Token 失败"})
@@ -253,18 +295,21 @@ func (h *tokenHandlers) authTokens(c *gin.Context) {
 		expires := now.Add(time.Duration(days) * 24 * time.Hour)
 		sum := sha256.Sum256([]byte(plain))
 		token := domain.APIToken{
-			ID:        "tok-" + randomID(),
-			UserID:    user.ID,
-			Name:      name,
-			Prefix:    tokenPrefix(plain),
-			TokenHash: hex.EncodeToString(sum[:]),
-			ExpiresAt: &expires,
-			CreatedAt: now,
+			ID:         "tok-" + randomID(),
+			UserID:     user.ID,
+			Name:       name,
+			Prefix:     tokenPrefix(plain),
+			TokenHash:  hex.EncodeToString(sum[:]),
+			ExpiresAt:  &expires,
+			CreatedAt:  now,
+			Scopes:     scopes,
+			ProjectIDs: projects,
 		}
 		if err := h.repo.PutAPIToken(token); err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": "保存 Token 失败"})
 			return
 		}
+		c.Set(auditDetailKey, map[string]any{"tokenId": token.ID, "name": token.Name, "scopes": token.Scopes, "projectIds": token.ProjectIDs, "expiresAt": expires})
 		c.JSON(http.StatusCreated, map[string]any{"token": plain, "metadata": token})
 	}
 }
@@ -281,6 +326,7 @@ func (h *tokenHandlers) authToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "Token ID 不能为空"})
 		return
 	}
+	c.Set(auditDetailKey, map[string]any{"tokenId": id})
 	if !h.repo.RevokeAPIToken(id, user.ID, time.Now().UTC()) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "Token 不存在或已撤销"})
 		return
@@ -320,4 +366,46 @@ func tokenPrefix(token string) string {
 		return token
 	}
 	return token[:12]
+}
+
+// tokenGrantInput validates the scopes and projects requested for a new
+// token: known scopes, admin only for administrators, and projects the owner
+// can read.
+func (h *tokenHandlers) tokenGrantInput(c *gin.Context, user *auth.User, scopes, projects []string) ([]string, []string, string) {
+	var cleanScopes, cleanProjects []string
+	for _, s := range scopes {
+		if s = strings.TrimSpace(s); s != "" {
+			cleanScopes = append(cleanScopes, s)
+		}
+	}
+	if err := domain.ValidateTokenScopes(cleanScopes); err != nil {
+		return nil, nil, err.Error()
+	}
+	admin := h.isPlatformAdmin(c.Request)
+	for _, s := range cleanScopes {
+		if s == domain.TokenScopeAdmin && !admin {
+			return nil, nil, "只有平台管理员可以创建带 admin 权限的 Token"
+		}
+	}
+	seen := map[string]bool{}
+	for _, id := range projects {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if _, found := h.repo.Project(id); !found {
+			return nil, nil, "项目 " + id + " 不存在"
+		}
+		if authRequired() && !admin && !projectMemberReads(*h.deps, id, user.ID) {
+			return nil, nil, "你不是项目 " + id + " 的成员"
+		}
+		cleanProjects = append(cleanProjects, id)
+	}
+	if len(cleanProjects) > 0 && len(cleanScopes) == 0 {
+		// A project-limited token without scopes would still be read-write;
+		// make that explicit rather than implicit.
+		cleanScopes = []string{domain.TokenScopeRead}
+	}
+	return cleanScopes, cleanProjects, ""
 }

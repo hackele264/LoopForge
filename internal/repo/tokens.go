@@ -38,6 +38,7 @@ func (r *TokensRepo) PutAPIToken(token domain.APIToken) error {
 		ID: token.ID, UserID: token.UserID, Name: token.Name, Prefix: token.Prefix,
 		TokenHash: token.TokenHash, LastUsedAt: token.LastUsedAt, ExpiresAt: token.ExpiresAt,
 		Created: token.CreatedAt, RevokedAt: token.RevokedAt,
+		Scopes: strings.Join(token.Scopes, ","), ProjectIDs: strings.Join(token.ProjectIDs, ","),
 	}).Error
 }
 
@@ -79,7 +80,8 @@ func (r *TokensRepo) RevokeAPIToken(id string, userID int64, now time.Time) bool
 }
 
 func (r apiTokenRow) toDomain() domain.APIToken {
-	token := domain.APIToken{ID: r.ID, UserID: r.UserID, Name: r.Name, Prefix: r.Prefix, TokenHash: r.TokenHash, CreatedAt: r.Created}
+	token := domain.APIToken{ID: r.ID, UserID: r.UserID, Name: r.Name, Prefix: r.Prefix, TokenHash: r.TokenHash, CreatedAt: r.Created,
+		Scopes: splitList(r.Scopes), ProjectIDs: splitList(r.ProjectIDs)}
 	if r.LastUsedAt != nil {
 		t := *r.LastUsedAt
 		token.LastUsedAt = &t
@@ -93,4 +95,14 @@ func (r apiTokenRow) toDomain() domain.APIToken {
 		token.RevokedAt = &t
 	}
 	return token
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

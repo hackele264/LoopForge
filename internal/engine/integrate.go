@@ -268,6 +268,7 @@ func (e *Engine) requeueIntegrationConflict(id, targetBranch string, files []str
 				nr.Status = "pending"
 				nr.Error = ""
 				nr.Output = ""
+				nr.ResetBranchState()
 				nr.ChildRunID = ""
 				nr.FinishedAt = time.Time{}
 				if n == target {

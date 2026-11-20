@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"agentflow/internal/connector"
 	"agentflow/internal/domain"
 	"agentflow/internal/gitwork"
 	"agentflow/internal/repo"
@@ -106,6 +107,17 @@ func (e *Engine) execute(ctx context.Context, runID string) {
 		}
 		wf := workflowForRun(e.repo, r)
 		e.reconcileNodeExecutions(runID)
+		if len(branchDecisions(wf, r)) > 0 {
+			// Settle untaken branches and false conditions before picking work,
+			// then re-read the run so readiness and settlement see the result.
+			settled := false
+			e.updateRun(runID, func(current *domain.Run) {
+				settled = settleBranches(workflowForRun(e.repo, *current), current)
+			})
+			if settled {
+				continue
+			}
+		}
 		inflightMu.Lock()
 		var ready []domain.WorkflowNode
 		for _, node := range readyNodes(wf, r) {
@@ -226,7 +238,7 @@ func resolveNodeExecutor(st *repo.Store, node domain.WorkflowNode, agent domain.
 func workflowSandboxRequirements(st *repo.Store, wf domain.WorkflowDefinition) (runtime.SandboxRequirements, error) {
 	var requirements []runtime.SandboxRequirements
 	for _, node := range wf.Nodes {
-		if node.Type == "script" || node.Type == "command" || node.Type == "approval" || node.Type == "sop" {
+		if node.Type == "script" || node.Type == "command" || node.Type == "approval" || node.Type == "sop" || node.Type == connector.NodeType {
 			continue
 		}
 		agent, ok := workflowAgent(st, wf, node.AgentID)
@@ -367,6 +379,10 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 	}
 	if node.Type == "sop" {
 		e.executeSOPNode(ctx, runID, wf, node, executionAttempt, executionGeneration)
+		return
+	}
+	if node.Type == connector.NodeType {
+		e.executeActionNode(ctx, runID, wf, node, executionAttempt, executionGeneration)
 		return
 	}
 	if node.Type == "approval" {
@@ -619,6 +635,8 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 	loopFeedback := ""
 	invocationSeq := 0
 	requiresSubmit := false
+	// structuredOutput is the script node's validated $LOOPFORGE_OUTPUT.
+	var structuredOutput domain.RawJSON
 	var runOnce func(string) (string, error)
 	switch node.Type {
 	case "script", "command":
@@ -637,6 +655,15 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 			command := script
 			if language == "python" {
 				command = "python3 -c " + shellSingleQuote(script)
+			}
+			structuredOutput = ""
+			localScript := e.defaultExecutionRunner(current) == "" && structuredIOEnabled(current, wf)
+			if localScript {
+				prefix, ioErr := prepareScriptIO(sb.Workspace(), current, node.ID)
+				if ioErr != nil {
+					return "", ioErr
+				}
+				command = prefix + command
 			}
 			rawOutput, runErr := executeForTargets(current, node.ExecutionScope, func(target executionTarget) (string, error) {
 				bound := bindExecutionTarget(command, target)
@@ -660,6 +687,9 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 				gateExec = func(command string, target executionTarget, gateSink runtime.EventSink) (string, error) {
 					return e.dispatchRunnerCommand(ctx, execMachine, runID, node.ID, workspace, bindExecutionTarget(command, target), gateSink)
 				}
+			}
+			if runErr == nil && localScript {
+				structuredOutput, runErr = readScriptOutput(sb.Workspace(), node)
 			}
 			if runErr == nil && node.RunOnWorkspaceRebuild {
 				if recordErr := e.recordNodeWorkspacePreparation(ctx, current, sb, node, rawOutput); recordErr != nil {
@@ -755,6 +785,9 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 			}
 			if requiresSubmit {
 				prompt = appendSubmitGateInstruction(prompt, node.RejectTo, feedback == gateMissingRetryMarker)
+				if len(node.OutputSchema) > 0 {
+					prompt = appendSubmitOutputInstruction(prompt, node.OutputSchema, feedback == gateMissingRetryMarker)
+				}
 			}
 			if repositoryFallback != "" {
 				prompt = runtime.GitPreparationFallbackPrompt(current.RepositoryContexts(), repositoryFallback) + prompt
@@ -769,6 +802,10 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 			options := runtime.InvocationOptions{RunID: runID, NodeID: node.ID, ResumeSessionID: resumeSessionID, Repositories: current.RepositoryContexts()}
 			if requiresSubmit {
 				options.GateResultPath = gateResultPath(nodeControlKey(current, node.ID), attempt)
+				if len(node.OutputSchema) > 0 {
+					options.OutputPath = agentOutputPath(nodeControlKey(current, node.ID), attempt)
+					options.OutputSchema = node.OutputSchema
+				}
 			}
 			ex := ex
 			if cb := sb.credentialSnapshot().CodeBuddy; ex.Kind == "codebuddy" && cb.Sponsored {
@@ -826,6 +863,9 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 				}
 			})
 			if reported == nil {
+				if len(node.OutputSchema) > 0 {
+					_ = clearGateResult(sb.Workspace(), agentOutputPath(nodeControlKey(current, node.ID), executionAttempt))
+				}
 				if clearErr := clearGateResult(sb.Workspace(), submitPath); clearErr != nil {
 					err = fmt.Errorf("clear submit_gate_result: %w", clearErr)
 					failedAction = "human"
@@ -1075,6 +1115,14 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 		}
 	}
 	current, _ = e.repo.RunState(runID)
+	if requiresSubmit && len(node.OutputSchema) > 0 {
+		data, outErr := readAgentOutput(outputs, agentOutputPath(nodeControlKey(current, node.ID), executionAttempt), node)
+		if outErr != nil {
+			failNode(outErr, false)
+			return
+		}
+		structuredOutput = data
+	}
 	artifacts, err := collectArtifactsMode(outputs, current, effectiveNode, output, false)
 	if err != nil {
 		failNode(fmt.Errorf("artifact contract: %w", err), nodeRejects(node))
@@ -1091,6 +1139,9 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 		r.Artifacts = append(r.Artifacts, artifacts...)
 		nr.Output = output
 		nr.Error = ""
+		if structuredOutput != "" {
+			nr.Data = structuredOutput
+		}
 		if manualGateName != "" {
 			nr.Status = "waiting_approval"
 			nr.FinishedAt = time.Now().UTC()

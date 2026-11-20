@@ -73,6 +73,16 @@ curl -u "$AGENTFLOW_USER:$AGENTFLOW_PASS" -X PUT \
 
 源 SOP 是通用模板时，复制会同时把模板引用的角色创建到 `projectId` 指定的项目（已存在的同名角色直接复用），并把节点上的 `agentId` 重写到本项目角色，因此复制出的 SOP 可直接运行；此时 `projectId` 必填，缺失返回 `400`。模板声明的 `requirements` 会保留在副本上，Studio 继续据此提示依赖（例如发起 MR 节点需要工蜂 Git Token / 工蜂 MCP）。
 
+### `POST /api/workflow-conditions/check`
+
+试运行节点的执行条件（`runIf`），不读任何已存数据、不执行任何节点。请求：
+
+```json
+{"expression":"nodes.triage.data.verdict == \"malicious\" && trigger.severity == \"high\"","trigger":{"severity":"high"},"nodes":{"triage":{"data":{"verdict":"malicious"}}},"workflow":{"nodes":[],"edges":[]},"nodeId":"contain"}
+```
+
+`expression` 必填；`nodes` 中未写 `status` 时按 `succeeded`；`data` 必须是 JSON 对象。传 `workflow` 和 `nodeId` 时额外检查条件只读取上游节点。成功 `200` 返回 `{"valid":true,"nodeRefs":["triage"],"result":true}`；编译或引用错误时 `valid=false` 并带 `error` 和 `stage`（`compile`/`reference`）；求值出错时 `valid=true`、无 `result`、`stage=evaluate`，这种条件在运行时会使节点失败。缺少 `expression` 或样例格式错误返回 `400`。语法见[条件分支](../conditional-workflows.md)。
+
 ## 运行
 
 对话工作区使用 `kind=workspace`，仅作为沙箱与文件生命周期记录，不执行 SOP 节点，不占用 SOP 配额。环境取用户在高级设置中的选择，否则由 Main Bot 打开工作区时选择（默认 `generic-docker`），创建后冻结；详见 [对话工作区](../conversation-workspaces.md)。旧角色协作写入口已移除，历史记录可继续查看。

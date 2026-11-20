@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -78,7 +79,7 @@ func (e *Engine) executeSOPNode(ctx context.Context, runID string, wf domain.Wor
 		exec.WorkspaceRunID = workspaceRunID(parent)
 		exec.RunID = ""
 		exec.TraceID = parent.ExecutionContext.TraceID
-		started, err := e.StartWithRepositoriesContext(childID, childInput, parent.RepositoryContexts(), exec)
+		started, err := e.startWorkflow(childID, childInput, parent.RepositoryContexts(), exec, false, json.RawMessage(parent.TriggerPayload))
 		if err != nil {
 			fail(fmt.Errorf("启动子 SOP：%w", err))
 			return

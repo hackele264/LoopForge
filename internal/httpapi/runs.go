@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -86,10 +87,24 @@ func (h *runsHandlers) runs(c *gin.Context) {
 			return
 		}
 		user, authenticated := h.requestUser(r, true)
+		readable := h.projectReadFilter(r)
+		issueProjects := map[string]string{}
 		visible := runs[:0]
 		for _, run := range runs {
-			if run.IsPersonalWorkspace() && (!authenticated || user.ID <= 0 || user.ID != run.ExecutionContext.ResponsibleUserID) {
-				continue
+			if run.IsPersonalWorkspace() {
+				if !authenticated || user.ID <= 0 || user.ID != run.ExecutionContext.ResponsibleUserID {
+					continue
+				}
+			} else {
+				issueID := run.ExecutionContext.IssueID
+				if _, seen := issueProjects[issueID]; !seen && issueID != "" && run.ExecutionContext.ProjectID == "" {
+					if issue, found := h.repo.Issue(issueID); found {
+						issueProjects[issueID] = issue.ProjectID
+					}
+				}
+				if !readable(domain.RunProjectID(run, issueProjects[issueID])) {
+					continue
+				}
 			}
 			visible = append(visible, run)
 		}
@@ -98,9 +113,10 @@ func (h *runsHandlers) runs(c *gin.Context) {
 	}
 	if r.Method == http.MethodPost {
 		var req struct {
-			WorkflowID string `json:"workflowId"`
-			Input      string `json:"input"`
-			ProjectID  string `json:"projectId"`
+			WorkflowID string          `json:"workflowId"`
+			Input      string          `json:"input"`
+			ProjectID  string          `json:"projectId"`
+			Trigger    json.RawMessage `json:"trigger,omitempty"`
 		}
 		if !decode(c, &req) {
 			return
@@ -142,7 +158,7 @@ func (h *runsHandlers) runs(c *gin.Context) {
 			}
 			repositories = []domain.RepositoryContext{repositoryRunContext(repoDef)}
 		}
-		v, err := h.engine.StartWithRepositoriesContext(req.WorkflowID, req.Input, repositories, domain.TelemetryContext{ProjectID: req.ProjectID, ResponsibleUserID: responsibleUserID})
+		v, err := h.engine.StartWithTrigger(req.WorkflowID, req.Input, req.Trigger, repositories, domain.TelemetryContext{ProjectID: req.ProjectID, ResponsibleUserID: responsibleUserID})
 		if err != nil {
 			respond(c, err)
 			return
@@ -261,7 +277,7 @@ func (h *runsHandlers) run(c *gin.Context) {
 			if rejectBlockedIssueRun(h.deps, c, id) {
 				return
 			}
-			respond(c, h.engine.Approve(id, req.NodeID, req.Context, decisionExpectation(req.NodeID, req.Expected)...))
+			respond(c, h.engine.ApproveAs(id, req.NodeID, req.Context, h.requestActor(c.Request), decisionExpectation(req.NodeID, req.Expected)...))
 		}
 	case "/api/runs/:id/reject":
 		var req domain.RejectRequest
@@ -269,7 +285,7 @@ func (h *runsHandlers) run(c *gin.Context) {
 			if rejectBlockedIssueRun(h.deps, c, id) {
 				return
 			}
-			respond(c, h.engine.Reject(id, req, decisionExpectation(req.NodeID, req.Expected)...))
+			respond(c, h.engine.RejectAs(id, req, h.requestActor(c.Request), decisionExpectation(req.NodeID, req.Expected)...))
 		}
 	case "/api/runs/:id/retry":
 		var req domain.HumanDecision
@@ -312,7 +328,7 @@ func (h *runsHandlers) run(c *gin.Context) {
 			if rejectBlockedIssueRun(h.deps, c, id) {
 				return
 			}
-			respond(c, h.engine.Pass(id, req.NodeID, req.Context))
+			respond(c, h.engine.PassAs(id, req.NodeID, req.Context, h.requestActor(c.Request)))
 		}
 	default:
 		c.Status(http.StatusNotFound)

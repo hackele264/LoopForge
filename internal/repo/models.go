@@ -87,6 +87,9 @@ type apiTokenRow struct {
 	ExpiresAt  *time.Time `gorm:"column:expires_at"`
 	Created    time.Time  `gorm:"column:created_at"`
 	RevokedAt  *time.Time `gorm:"column:revoked_at"`
+	// Scopes and ProjectIDs are comma-separated; empty means unrestricted.
+	Scopes     string `gorm:"column:scopes;size:255"`
+	ProjectIDs string `gorm:"column:project_ids;type:text"`
 }
 
 func (apiTokenRow) TableName() string { return "api_tokens" }
@@ -345,6 +348,8 @@ type runRow struct {
 	QueueEntered       *time.Time `gorm:"column:queue_entered_at;index:idx_runs_quota_bucket,priority:3"`
 	Revision           int        `gorm:"column:revision"`
 	Input              string     `gorm:"column:input;type:text"`
+	TriggerPayload     []byte     `gorm:"column:trigger_payload;type:json"`
+	CaseID             string     `gorm:"column:case_id;size:64;index:idx_runs_case"`
 	HumanContext       string     `gorm:"column:human_context;type:text"`
 	CancelRequested    bool       `gorm:"column:cancel_requested"`
 	PauseRequested     bool       `gorm:"column:pause_requested"`
@@ -391,6 +396,8 @@ type runEventRow struct {
 	Message string     `gorm:"column:message;type:text"`
 	Payload []byte     `gorm:"column:payload;type:json"`
 	Ts      *time.Time `gorm:"column:ts"`
+	// ActorUserID indexes human control events by who performed them.
+	ActorUserID int64 `gorm:"column:actor_user_id;index:idx_run_events_actor"`
 }
 
 func (runEventRow) TableName() string { return "run_events" }
@@ -749,6 +756,9 @@ func allModels() []any {
 	return []any{domain.BotUserBinding{}, domain.BotBindingChallenge{}, domain.BotConnection{}, domain.BotConversation{}, domain.BotInteraction{}, notificationBotRow{}, botCredentialRow{}, domain.NotificationDelivery{},
 		userRow{}, localAccountRow{}, userConfigRow{}, gitSSHKeyRow{}, gitHTTPCredentialRow{}, authIntegrationRow{}, platformCodeBuddyKeyRow{}, apiTokenRow{}, genericTemplateRow{},
 		insightSourceRow{}, insightExecutionRow{},
+		webhookRow{}, webhookDedupRow{}, webhookDeliveryRow{},
+		alertRow{}, caseRow{}, caseCounterRow{}, caseIOCRow{}, caseEventRow{}, caseTriggerRow{},
+		connectionRow{}, auditEventRow{},
 		projectRow{}, projectMemberRow{}, repositoryRow{}, businessDomainRow{}, businessDomainAssignmentRow{},
 		agentRow{}, ruleRow{}, skillRow{}, skillFileRow{}, mcpServerRow{}, mcpFileRow{}, executorRow{},
 		dockerfileRow{}, environmentRow{}, sandboxRow{},

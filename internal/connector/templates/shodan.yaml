@@ -1,0 +1,45 @@
+id: shodan
+title: Shodan
+vendor: Shodan
+description: 查询 IP 暴露的端口、服务和已知漏洞。
+docs: https://developer.shodan.io/api
+baseUrl: https://api.shodan.io
+auth:
+  type: query
+  name: key
+  secret: api_key
+secrets:
+  - name: api_key
+    label: API Key
+    required: true
+testAction: api_info
+actions:
+  - id: host
+    title: 主机信息
+    description: Shodan 没有该 IP 的记录时返回 found=false。
+    category: enrichment
+    inputs:
+      - name: ip
+        label: IP 地址
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /shodan/host/{{ inputs.ip }}
+    success: [200, 404]
+    output:
+      found: response.status == 200
+      ports: response.body.ports
+      org: response.body.org
+      os: response.body.os
+      vulns: response.body.vulns
+      country: response.body.country_code
+  - id: api_info
+    title: 账户额度
+    category: utility
+    request:
+      method: GET
+      path: /api-info
+    output:
+      plan: response.body.plan
+      queryCredits: response.body.query_credits

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"strconv"
@@ -492,9 +493,13 @@ type RunnerInvocation struct {
 	InvocationID    string                  `json:"invocationId,omitempty"`
 	ResumeSessionID string                  `json:"resumeSessionId,omitempty"`
 	GateResultPath  string                  `json:"gateResultPath,omitempty"`
-	Executor        ExecutorDefinition      `json:"executor"`
-	Agent           AgentDefinition         `json:"agent"`
-	Assets          AgentAssetBundle        `json:"assets"`
+	// OutputPath / OutputSchema enable submit_output for nodes that declare
+	// structured output; the runner returns the file like the gate result.
+	OutputPath   string             `json:"outputPath,omitempty"`
+	OutputSchema json.RawMessage    `json:"outputSchema,omitempty"`
+	Executor     ExecutorDefinition `json:"executor"`
+	Agent        AgentDefinition    `json:"agent"`
+	Assets       AgentAssetBundle   `json:"assets"`
 	// Artifacts are the node's artifact contracts: the runner uploads the
 	// content of each declared path when it completes, and the engine writes
 	// them into the run workspace so verification and handoff keep working.

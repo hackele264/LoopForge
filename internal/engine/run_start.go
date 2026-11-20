@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"agentflow/internal/apperr"
 	"agentflow/internal/domain"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -54,17 +57,45 @@ func (e *Engine) StartWithRepositoriesContext(workflowID, input string, reposito
 	return e.startWorkflow(workflowID, input, repositories, executionContext, false)
 }
 
-func (e *Engine) startWorkflow(workflowID, input string, repositories []domain.RepositoryContext, executionContext domain.TelemetryContext, workspace bool) (domain.Run, error) {
+// StartWithTrigger starts a run carrying a structured trigger payload (a JSON
+// object) that RunIf expressions read as `trigger`.
+func (e *Engine) StartWithTrigger(workflowID, input string, trigger json.RawMessage, repositories []domain.RepositoryContext, executionContext domain.TelemetryContext) (domain.Run, error) {
+	payload, err := normalizeTriggerPayload(trigger)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	return e.startWorkflow(workflowID, input, repositories, executionContext, false, payload)
+}
+
+// MaxTriggerPayloadBytes bounds a run's trigger payload.
+const MaxTriggerPayloadBytes = 1 << 20
+
+func normalizeTriggerPayload(trigger json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(trigger)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if len(trimmed) > MaxTriggerPayloadBytes {
+		return nil, apperr.Newf(apperr.Invalid, "trigger payload exceeds %d bytes", MaxTriggerPayloadBytes)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(trimmed, &object); err != nil {
+		return nil, apperr.New(apperr.Invalid, "trigger must be a JSON object")
+	}
+	return append(json.RawMessage(nil), trimmed...), nil
+}
+
+func (e *Engine) startWorkflow(workflowID, input string, repositories []domain.RepositoryContext, executionContext domain.TelemetryContext, workspace bool, trigger ...json.RawMessage) (domain.Run, error) {
 	wf, ok := e.repo.Workflow(workflowID)
 	if !ok {
 		return domain.Run{}, fmt.Errorf("workflow not found")
 	}
-	return e.startWorkflowDefinition(wf, input, repositories, executionContext, workspace)
+	return e.startWorkflowDefinition(wf, input, repositories, executionContext, workspace, trigger...)
 }
 
 // startWorkflowDefinition also accepts a run-only conversation workspace definition.
 // It never writes a template to the catalog.
-func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input string, repositories []domain.RepositoryContext, executionContext domain.TelemetryContext, workspace bool) (domain.Run, error) {
+func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input string, repositories []domain.RepositoryContext, executionContext domain.TelemetryContext, workspace bool, trigger ...json.RawMessage) (domain.Run, error) {
 	workflowID := wf.ID
 	repositories = normalizeRepositories(repositories)
 	domain.AssignRepositoryDirs(repositories)
@@ -153,7 +184,7 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 	}
 	wf.SandboxSnapshot = resolvedSandboxSnapshot(profile, resources)
 	r := domain.Run{
-		ID: id, WorkflowID: workflowID, WorkflowSnapshot: wf, Status: "running", Input: input,
+		ID: id, WorkflowID: workflowID, WorkflowSnapshot: wf, Status: "running", Input: input, TriggerPayload: domain.RawJSON(firstTrigger(trigger)),
 		Repository: firstRepository, ExecutionContext: executionContext, Nodes: map[string]*domain.NodeRun{},
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -213,4 +244,11 @@ func (e *Engine) executes() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.executeRuns && !e.draining
+}
+
+func firstTrigger(trigger []json.RawMessage) json.RawMessage {
+	if len(trigger) == 0 {
+		return nil
+	}
+	return trigger[0]
 }

@@ -23,15 +23,18 @@ type Run struct {
 	WorkspaceCleanedAt time.Time          `json:"workspaceCleanedAt,omitempty"`
 	// WorkspaceCleanupNotBefore delays terminal workspace deletion while a
 	// preview finalizer still needs the run directory. Zero means no hold.
-	WorkspaceCleanupNotBefore time.Time         `json:"workspaceCleanupNotBefore,omitempty"`
-	Status                    string            `json:"status"`
-	AdmissionState            string            `json:"admissionState,omitempty"`
-	QueueEnteredAt            time.Time         `json:"queueEnteredAt,omitempty"`
-	ConcurrencyExempt         bool              `json:"concurrencyExempt,omitempty"`
-	CancelRequested           bool              `json:"cancelRequested"`
-	PauseRequested            bool              `json:"pauseRequested"`
-	Input                     string            `json:"input"`
-	Repository                RepositoryContext `json:"repository,omitempty"`
+	WorkspaceCleanupNotBefore time.Time `json:"workspaceCleanupNotBefore,omitempty"`
+	Status                    string    `json:"status"`
+	AdmissionState            string    `json:"admissionState,omitempty"`
+	QueueEnteredAt            time.Time `json:"queueEnteredAt,omitempty"`
+	ConcurrencyExempt         bool      `json:"concurrencyExempt,omitempty"`
+	CancelRequested           bool      `json:"cancelRequested"`
+	PauseRequested            bool      `json:"pauseRequested"`
+	Input                     string    `json:"input"`
+	// TriggerPayload is the structured payload that started the run (a JSON
+	// object), readable from RunIf expressions as `trigger`.
+	TriggerPayload RawJSON           `json:"triggerPayload,omitempty"`
+	Repository     RepositoryContext `json:"repository,omitempty"`
 	// Repositories lists every repository frozen into this run. Repository
 	// mirrors the first entry so old readers (UI cards, tasks) keep working;
 	// execution logic must iterate Repositories and treats all entries as
@@ -165,6 +168,75 @@ type NodeRun struct {
 	ChildRunID      string      `json:"childRunId,omitempty"`
 	StartedAt       time.Time   `json:"startedAt,omitzero"`
 	FinishedAt      time.Time   `json:"finishedAt,omitzero"`
+	// SkipReason explains a "skipped" node: condition_false or branch_not_taken.
+	SkipReason string `json:"skipReason,omitempty"`
+	// Data is the node's validated structured output (a JSON object).
+	Data RawJSON `json:"data,omitempty"`
+	// ErrorRouted marks a final failure handed to the node's error edges; the
+	// run continues and does not fail because of it.
+	ErrorRouted bool `json:"errorRouted,omitempty"`
+	// DecidedBy / DecidedAt record who last approved, rejected or passed it.
+	DecidedBy int64     `json:"decidedBy,omitempty"`
+	DecidedAt time.Time `json:"decidedAt,omitzero"`
+}
+
+// Node statuses introduced for conditional workflows.
+const (
+	NodeStatusSkipped = "skipped"
+
+	SkipReasonConditionFalse = "condition_false"
+	SkipReasonBranchNotTaken = "branch_not_taken"
+)
+
+// ResetBranchState clears the per-attempt branching fields when a node is
+// reset to pending by a reject, retry or rework.
+func (n *NodeRun) ResetBranchState() {
+	if n == nil {
+		return
+	}
+	n.SkipReason = ""
+	n.Data = ""
+	n.ErrorRouted = false
+	n.DecidedBy = 0
+	n.DecidedAt = time.Time{}
+}
+
+// SettledOK reports whether a node no longer blocks a successful run: it
+// succeeded, was skipped, or its failure was routed to an error edge.
+func (n *NodeRun) SettledOK() bool {
+	if n == nil {
+		return false
+	}
+	switch n.Status {
+	case "succeeded", NodeStatusSkipped:
+		return true
+	case "failed":
+		return n.ErrorRouted
+	}
+	return false
+}
+
+// Actor kinds recorded on run events.
+const (
+	ActorUser    = "user"
+	ActorBot     = "bot"
+	ActorService = "service"
+	ActorSystem  = "system"
+)
+
+// Actor identifies who performed a human control action on a run.
+type Actor struct {
+	UserID int64  `json:"userId,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	Login  string `json:"login,omitempty"`
+	// TokenID is set when the actor authenticated with an API token rather
+	// than an interactive session.
+	TokenID string `json:"tokenId,omitempty"`
+}
+
+// Named reports whether the actor is a specific platform user.
+func (a Actor) Named() bool {
+	return a.UserID > 0 && (a.Kind == ActorUser || a.Kind == ActorBot)
 }
 
 // GateResult is the structured terminal decision submitted by an Agent through
@@ -231,6 +303,9 @@ type RunEvent struct {
 	Type      string    `json:"type"`
 	Message   string    `json:"message"`
 	Timestamp time.Time `json:"timestamp"`
+	// ActorUserID / ActorKind record who caused a human control event.
+	ActorUserID int64  `json:"actorUserId,omitempty"`
+	ActorKind   string `json:"actorKind,omitempty"`
 }
 
 // Artifact is an immutable, attempt-scoped snapshot. Keeping old attempts makes
@@ -250,4 +325,27 @@ type Artifact struct {
 	// collected from (empty = run workspace root, where SOP deliverables live).
 	RepositoryDir string    `json:"repositoryDir,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
+}
+
+// RawJSON is a JSON value kept verbatim as text. Unlike json.RawMessage it is
+// comparable, so structs that hold it (Run, NodeRun) still work with ==.
+// The empty value marshals as null and is dropped by omitempty.
+type RawJSON string
+
+// MarshalJSON writes the stored JSON unchanged.
+func (r RawJSON) MarshalJSON() ([]byte, error) {
+	if r == "" {
+		return []byte("null"), nil
+	}
+	return []byte(r), nil
+}
+
+// UnmarshalJSON stores the raw JSON text; null clears it.
+func (r *RawJSON) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*r = ""
+		return nil
+	}
+	*r = RawJSON(b)
+	return nil
 }

@@ -1,0 +1,47 @@
+id: wecom_bot
+title: 企业微信群机器人
+vendor: 腾讯
+description: 向企业微信群发送通知。密钥是机器人 Webhook 地址中 key= 后面的部分。
+docs: https://developer.work.weixin.qq.com/document/path/91770
+baseUrl: https://qyapi.weixin.qq.com
+auth:
+  type: query
+  name: key
+  secret: key
+secrets:
+  - name: key
+    label: 机器人 key
+    required: true
+actions:
+  - id: send_markdown
+    title: 发送 Markdown 消息
+    category: utility
+    inputs:
+      - name: content
+        label: 内容
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /cgi-bin/webhook/send
+      body:
+        msgtype: markdown
+        markdown:
+          content: "{{ inputs.content }}"
+    failIf: response.body.errcode != 0
+  - id: send_text
+    title: 发送文本消息
+    category: utility
+    inputs:
+      - name: content
+        label: 内容
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /cgi-bin/webhook/send
+      body:
+        msgtype: text
+        text:
+          content: "{{ inputs.content }}"
+    failIf: response.body.errcode != 0
