@@ -25,6 +25,10 @@
 .fb-fab.back{animation:fbBack .5s var(--hui-ease-flow)}
 @keyframes fbBack{from{opacity:0;transform:scale(.4)}}
 .fb-root.fb-lift .fb-fab{bottom:76px}
+/* While the button is on screen, a scrolling page ends with room for it, so
+   the last row of actions (an approval's 确认通过) can scroll out from under
+   it. Pages that scroll inside themselves (chat, run detail) are left alone. */
+body:not(.chat-next-active):has(.fb-fab:not(.gone)) .shell-main>main>.page-view.active:not(#runsView)::after{content:"";display:block;flex:none;height:56px}
 .fb-root.fb-lift .fb-panel{bottom:132px}
 
 /* ---------- trash target ---------- */
