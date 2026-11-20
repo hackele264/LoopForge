@@ -208,7 +208,7 @@ func branchDecisions(wf domain.WorkflowDefinition, r domain.Run) []branchDecisio
 // settleBranches applies skip and condition-failure decisions until none are
 // left, so a whole untaken branch settles in one pass. It reports whether the
 // run changed. Callers hold the run for writing (inside updateRun or under
-// stateMu).
+// the run's state lock).
 func settleBranches(wf domain.WorkflowDefinition, r *domain.Run) bool {
 	changed := false
 	for range len(wf.Nodes) + 1 {

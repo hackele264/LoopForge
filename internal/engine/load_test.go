@@ -22,8 +22,8 @@ import (
 	"agentflow/internal/runtime"
 )
 
-// TestStateLockLoad measures how far one engine instance's global state lock
-// carries a burst of alerts. Each alert starts a SOAR-shaped SOP of action
+// TestStateLockLoad measures how far one engine instance carries a burst of
+// alerts, and how long run state changes wait for their run's lock. Each alert starts a SOAR-shaped SOP of action
 // nodes (no sandbox): extract IOCs, three vendor lookups in parallel against
 // a fake vendor with a fixed latency, a join, and two condition branches.
 //
@@ -193,9 +193,9 @@ func TestStateLockLoad(t *testing.T) {
 	t.Logf("backend=%s projects=%d runs=%d vendor_latency=%s failed=%d vendor_calls=%d", backend, projects, runs, vendorDelay, failed, vendorCalls)
 	t.Logf("burst: all %d runs accepted in %s; all finished in %s (%.1f runs/s)", runs, startDone.Round(time.Millisecond), wall.Round(time.Millisecond), float64(runs)/wall.Seconds())
 	t.Logf("per-run latency (created to finished): p50=%s p95=%s max=%s", pct(0.5).Round(time.Millisecond), pct(0.95).Round(time.Millisecond), lat[len(lat)-1].Round(time.Millisecond))
-	t.Logf("state lock: %d acquisitions (%.1f per run), avg hold %s, max hold %s, held %.0f%% of the burst", acq, float64(acq)/float64(runs), (hold / time.Duration(max64(acq, 1))).Round(time.Microsecond), after.MaxHold.Round(time.Millisecond), 100*hold.Seconds()/wall.Seconds())
+	t.Logf("state lock: %d acquisitions (%.1f per run), avg hold %s, max hold %s, %.1f runs holding their lock on average", acq, float64(acq)/float64(runs), (hold / time.Duration(max64(acq, 1))).Round(time.Microsecond), after.MaxHold.Round(time.Millisecond), hold.Seconds()/wall.Seconds())
 	t.Logf("state lock wait: avg %s, max %s, total %s", (wait / time.Duration(max64(acq, 1))).Round(time.Microsecond), after.MaxWait.Round(time.Millisecond), wait.Round(time.Millisecond))
-	t.Logf("ceiling: %.0f state changes/s → about %.1f runs/s of this SOP", float64(acq)/hold.Seconds(), float64(runs)/hold.Seconds())
+	t.Logf("state changes: %.0f/s over the burst", float64(acq)/wall.Seconds())
 }
 
 func envInt(name string, def int) int {

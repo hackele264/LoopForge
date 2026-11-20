@@ -315,8 +315,7 @@ func (e *Engine) stalePipelineFailure(id, status, msg string) bool {
 	if status != "failed" || msg != pipelineFailedMessage {
 		return false
 	}
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(id)()
 	current, ok := e.repo.RunState(id)
 	if !ok {
 		return false

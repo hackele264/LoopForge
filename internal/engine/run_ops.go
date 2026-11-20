@@ -146,8 +146,7 @@ func (e *Engine) Approve(runID, nodeID, humanContext string, expected ...NodeExp
 // ApproveAs approves a waiting node on behalf of actor, enforcing the node's
 // approver policy and recording who decided.
 func (e *Engine) ApproveAs(runID, nodeID, humanContext string, actor domain.Actor, expected ...NodeExpectation) error {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(runID)()
 	r, ok := e.repo.RunState(runID)
 	if !ok {
 		return fmt.Errorf("run not found")
@@ -219,8 +218,7 @@ func (e *Engine) PassAs(runID, nodeID, humanContext string, actor domain.Actor, 
 }
 
 func (e *Engine) pass(runID, nodeID, humanContext string, actor domain.Actor, expected ...NodeExpectation) error {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(runID)()
 	r, ok := e.repo.RunState(runID)
 	if !ok {
 		return fmt.Errorf("run not found")
@@ -305,8 +303,7 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
 // behalf of actor, enforcing the deciding node's approver policy when the
 // node is a waiting human gate.
 func (e *Engine) RejectAs(runID string, req domain.RejectRequest, actor domain.Actor, expected ...NodeExpectation) error {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(runID)()
 	r, ok := e.repo.RunState(runID)
 	if !ok {
 		return fmt.Errorf("run not found")
@@ -415,8 +412,9 @@ func (e *Engine) RetryContext(ctx context.Context, runID, nodeID, reason, humanC
 
 // cancelLiveChildRuns stops child SOP runs whose parent node was reset and no
 // longer references them, so they neither keep working nor hold a workspace.
-// Callers hold stateMu and Cancel settles through updateRun, which takes it
-// too, so the cancellation runs once the caller has released the lock.
+// Callers hold the parent's state lock; each child is cancelled through
+// updateRun under its own lock, in the background so the caller is not held
+// up by it.
 func (e *Engine) cancelLiveChildRuns(ids []string) {
 	live := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -479,8 +477,7 @@ func (e *Engine) resumeParentAfterChildRecoveryContext(ctx context.Context, chil
 }
 
 func (e *Engine) retryContext(ctx context.Context, runID, nodeID, reason, humanContext, keepChildRunID string, expected ...NodeExpectation) error {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(runID)()
 	r, ok := e.repo.RunState(runID)
 	if !ok {
 		return fmt.Errorf("run not found")
@@ -732,8 +729,7 @@ func childRunIDs(r domain.Run) []string {
 }
 
 func (e *Engine) resumePaused(runID, humanContext string, expected ...NodeExpectation) error {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(runID)()
 	r, ok := e.repo.RunState(runID)
 	if !ok {
 		return fmt.Errorf("run not found")
@@ -861,8 +857,7 @@ func (e *Engine) resumePaused(runID, humanContext string, expected ...NodeExpect
 // published SOP. Completed nodes with the same ID keep their outcomes, new
 // nodes start pending, and the already materialised sandbox stays frozen.
 func (e *Engine) RefreshRunSOP(runID string) error {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(runID)()
 	r, ok := e.repo.RunState(runID)
 	if !ok {
 		return fmt.Errorf("run not found")
@@ -968,8 +963,7 @@ func markRunRelationsRunning(st *repo.Store, r domain.Run) {
 }
 
 func (e *Engine) DeclineRetry(runID, nodeID string, expected ...NodeExpectation) error {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(runID)()
 	r, ok := e.repo.RunState(runID)
 	if !ok {
 		return fmt.Errorf("run not found")
