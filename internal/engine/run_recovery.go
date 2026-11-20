@@ -118,7 +118,7 @@ func (e *Engine) ResumeInterruptedRuns() []string {
 	for _, id := range promoted {
 		e.publish(id)
 	}
-	for _, listed := range e.repo.Runs() {
+	for _, listed := range e.repo.LiveRuns() {
 		if listed.IsWorkspace() || listed.HistoricalGroup() {
 			continue
 		}
