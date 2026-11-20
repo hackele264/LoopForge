@@ -246,3 +246,45 @@ func TestResponseApprovalNeedsInteractivePerson(t *testing.T) {
 	// the point is that the gate opened only for a person.
 	waitFor(t, s, r.ID, "failed")
 }
+
+// TestConcurrentStartsGetDistinctRunIDs: runs started in the same clock
+// tick (a webhook burst) must not share an ID, or PutRun merges them.
+func TestConcurrentStartsGetDistinctRunIDs(t *testing.T) {
+	t.Parallel()
+	e, s := newBranchEngine(t)
+	wf := domain.WorkflowDefinition{ID: "burst", Name: "burst", SandboxProfileID: "local",
+		Nodes: []domain.WorkflowNode{{ID: "ok", Name: "ok", Type: "approval", MaxAttempts: 1}}}
+	if err := s.PutWorkflow(wf); err != nil {
+		t.Fatal(err)
+	}
+	const n = 200
+	ids := make([]string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r, err := e.StartWithTrigger(wf.ID, "", json.RawMessage(`{}`), nil, domain.TelemetryContext{})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			ids[i] = r.ID
+		}(i)
+	}
+	wg.Wait()
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			t.Fatalf("run ID %s handed out twice", id)
+		}
+		seen[id] = true
+	}
+	// Every run is stored as its own row (runs past the per-project limit
+	// stay queued; the claim loop that promotes them is not running here).
+	for _, id := range ids {
+		if r, ok := s.RunState(id); !ok || r.ID != id || r.WorkflowID != wf.ID {
+			t.Fatalf("run %s not stored on its own: %v %+v", id, ok, r.ExecutionContext)
+		}
+	}
+}
