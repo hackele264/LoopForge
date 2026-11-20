@@ -24,6 +24,7 @@ import (
 	"agentflow/internal/preview"
 	"agentflow/internal/repo"
 	"agentflow/internal/runtime"
+	"agentflow/internal/secretbox"
 	"agentflow/internal/tracker"
 	"github.com/gin-gonic/gin"
 )
@@ -133,8 +134,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s, err := repo.Open(strings.TrimSpace(*mysqlDSN))
+	secretKeys, err := secretbox.LoadEnv(os.Getenv)
 	if err != nil {
+		log.Fatalf("credential encryption key: %v", err)
+	}
+	s, err := repo.Open(strings.TrimSpace(*mysqlDSN), repo.WithSecretKeyring(secretKeys))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := checkStoredSecrets(s, secretKeys, log.Printf); err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("storage driver=%v database=%v role=%s", s.StorageInfo()["driver"], s.StorageInfo()["database"], role)

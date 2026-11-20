@@ -55,8 +55,8 @@ build() {
 
 printf 'Building with %s parallel jobs\n' "$jobs"
 if [[ $mode != platform ]]; then
-  printf '\nBuilding agentflow-mcp and loopforge-account for the platform…\n'
-  build '' ./cmd/agentflow-mcp ./cmd/loopforge-account
+  printf '\nBuilding agentflow-mcp, loopforge-account and loopforge-secrets for the platform…\n'
+  build '' ./cmd/agentflow-mcp ./cmd/loopforge-account ./cmd/loopforge-secrets
   for target_os in linux darwin; do
     for target_arch in amd64 arm64; do
       printf '\nBuilding agentflow-runner and agentflow-gate-mcp (%s/%s)…\n' "$target_os" "$target_arch"

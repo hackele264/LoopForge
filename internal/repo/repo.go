@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"agentflow/internal/domain"
+	"agentflow/internal/secretbox"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -112,6 +113,9 @@ type TasksRepo struct {
 // UsersRepo owns users and their saved credentials.
 type UsersRepo struct {
 	*deps
+	// secrets seals bot credentials (user_bot_credentials); nil keeps them
+	// in plaintext. See secret_columns.go.
+	secrets *secretbox.Keyring
 }
 
 // TokensRepo owns API tokens.
@@ -196,14 +200,40 @@ type Store struct {
 	*BotInteractionsRepo
 }
 
+// Option configures Open and OpenTest.
+type Option func(*options)
+
+type options struct {
+	secrets *secretbox.Keyring
+}
+
+// WithSecretKeyring encrypts stored credentials (connection secrets, bot
+// credentials) with k. Without it, or with a nil keyring, they are written in
+// plaintext and encrypted values cannot be read.
+func WithSecretKeyring(k *secretbox.Keyring) Option {
+	return func(o *options) { o.secrets = k }
+}
+
+func collectOptions(opts []Option) options {
+	var o options
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return o
+}
+
 // newStore wires the shared deps and every cross-domain pointer. Domains have
-// no cycles, so a single construction pass is enough.
-func newStore(db *gorm.DB) *Store {
+// no cycles, so a single construction pass is enough. The secret keyring is
+// not a shared dep: it is injected explicitly into the repos that own
+// encrypted columns, like any other cross-domain pointer.
+func newStore(db *gorm.DB, o options) *Store {
 	d := &deps{DB: db}
 	s := &Store{deps: d}
 	s.ProjectsRepo = &ProjectsRepo{deps: d}
 	s.BusinessDomainsRepo = &BusinessDomainsRepo{deps: d}
-	s.UsersRepo = &UsersRepo{deps: d}
+	s.UsersRepo = &UsersRepo{deps: d, secrets: o.secrets}
 	s.BotInteractionsRepo = &BotInteractionsRepo{deps: d}
 	s.TokensRepo = &TokensRepo{deps: d}
 	s.AssistantRepo = &AssistantRepo{deps: d, users: s.UsersRepo}
@@ -219,7 +249,7 @@ func newStore(db *gorm.DB) *Store {
 	s.InsightsRepo = &InsightsRepo{deps: d}
 	s.WebhooksRepo = &WebhooksRepo{deps: d}
 	s.CasesRepo = &CasesRepo{deps: d}
-	s.ConnectionsRepo = &ConnectionsRepo{deps: d}
+	s.ConnectionsRepo = &ConnectionsRepo{deps: d, secrets: o.secrets}
 	s.AlertSourcesRepo = &AlertSourcesRepo{deps: d}
 	s.AuditRepo = &AuditRepo{deps: d}
 	s.AnalyticsRepo = &AnalyticsRepo{deps: d, runs: s.RunsRepo, catalog: s.CatalogRepo, delivery: s.DeliveryRepo, issues: s.IssuesRepo, tasks: s.TasksRepo, projects: s.ProjectsRepo, insights: s.InsightsRepo}
@@ -234,7 +264,7 @@ func newStore(db *gorm.DB) *Store {
 
 // Open connects the store to MySQL, which is where all state lives. An empty
 // DSN is a configuration error, not a reason to invent state somewhere else.
-func Open(dsn string) (*Store, error) {
+func Open(dsn string, opts ...Option) (*Store, error) {
 	dsn = strings.TrimSpace(dsn)
 	if dsn == "" {
 		dsn = strings.TrimSpace(os.Getenv("AGENTFLOW_MYSQL_DSN"))
@@ -264,7 +294,7 @@ func Open(dsn string) (*Store, error) {
 			return nil, fmt.Errorf("mysql ping: %w", err)
 		}
 	}
-	s := newStore(db)
+	s := newStore(db, collectOptions(opts))
 	// Incremental DDL only (missing columns/tables/indexes) via gorm's
 	// migrator. Schema baselines, data migrations and seed data are NOT run
 	// from code: they are plain SQL scripts under migrations/, applied

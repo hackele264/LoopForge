@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"agentflow/internal/connector"
 	"agentflow/internal/domain"
+	"agentflow/internal/repo"
 )
 
 // validateWorkflowActions checks a workflow's action nodes on save: known
@@ -23,9 +25,12 @@ func (h *catalogHandlers) validateWorkflowActions(wf domain.WorkflowDefinition) 
 		if id == "" {
 			continue
 		}
-		conn, ok := h.repo.Connection(id)
-		if !ok {
+		conn, err := h.repo.Connection(id)
+		if errors.Is(err, repo.ErrConnectionNotFound) {
 			return fmt.Errorf("node %s: connection %s not found", n.ID, id)
+		}
+		if err != nil {
+			return fmt.Errorf("node %s: connection %s: %w", n.ID, id, err)
 		}
 		if conn.ConnectorID != n.Action.Connector {
 			return fmt.Errorf("node %s: connection %s is for connector %s", n.ID, conn.Name, conn.ConnectorID)

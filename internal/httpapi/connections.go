@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -209,10 +211,26 @@ func connectionView(c domain.Connection) domain.Connection {
 	return c
 }
 
-func (h *connectionsHandlers) loadConnection(c *gin.Context, write bool) (domain.Connection, *connector.Connector, bool) {
-	conn, ok := h.repo.Connection(c.Param("id"))
-	if !ok {
+// loadConnection checks access on the connection's record before its
+// secrets are read, so a caller without access learns nothing from a
+// decryption failure. withSecrets loads the secrets after the check.
+func (h *connectionsHandlers) loadConnection(c *gin.Context, write, withSecrets bool) (domain.Connection, *connector.Connector, bool) {
+	conn, err := h.repo.ConnectionInfo(c.Param("id"))
+	if errors.Is(err, repo.ErrConnectionNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "connection not found"})
+		return domain.Connection{}, nil, false
+	}
+	if err != nil {
+		respondConnectionError(c, err)
+		return domain.Connection{}, nil, false
+	}
+	allowed := false
+	if write {
+		allowed = h.requireProjectWriter(c, conn.ProjectID)
+	} else {
+		allowed = h.cases.projectReader(c, conn.ProjectID)
+	}
+	if !allowed {
 		return domain.Connection{}, nil, false
 	}
 	def, ok := connector.Default().Connector(conn.ConnectorID)
@@ -220,31 +238,38 @@ func (h *connectionsHandlers) loadConnection(c *gin.Context, write bool) (domain
 		c.JSON(http.StatusConflict, gin.H{"error": "connector " + conn.ConnectorID + " is no longer installed"})
 		return domain.Connection{}, nil, false
 	}
-	if write {
-		return conn, def, h.requireProjectWriter(c, conn.ProjectID)
+	if withSecrets {
+		if conn, err = h.repo.Connection(conn.ID); err != nil {
+			respondConnectionError(c, err)
+			return domain.Connection{}, nil, false
+		}
 	}
-	return conn, def, h.cases.projectReader(c, conn.ProjectID)
+	return conn, def, true
 }
 
 // connection answers GET, PUT and DELETE /api/connections/{id}.
 func (h *connectionsHandlers) connection(c *gin.Context) {
 	if c.Request.Method == http.MethodGet {
-		conn, _, ok := h.loadConnection(c, false)
+		conn, _, ok := h.loadConnection(c, false, false)
 		if ok {
 			c.JSON(http.StatusOK, connectionView(conn))
 		}
 		return
 	}
-	conn, def, ok := h.loadConnection(c, true)
-	if !ok {
-		return
-	}
 	if c.Request.Method == http.MethodDelete {
+		conn, _, ok := h.loadConnection(c, true, false)
+		if !ok {
+			return
+		}
 		if err := h.repo.DeleteConnection(conn.ID); err != nil {
 			respondConnectionError(c, err)
 			return
 		}
 		c.Status(http.StatusNoContent)
+		return
+	}
+	conn, def, ok := h.loadConnection(c, true, true)
+	if !ok {
 		return
 	}
 	var req connectionInput
@@ -260,7 +285,11 @@ func (h *connectionsHandlers) connection(c *gin.Context) {
 		respond(c, err)
 		return
 	}
-	stored, _ := h.repo.Connection(conn.ID)
+	stored, err := h.repo.ConnectionInfo(conn.ID)
+	if err != nil {
+		respondConnectionError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, connectionView(stored))
 }
 
@@ -276,7 +305,7 @@ type connectionTestResult struct {
 // testConnection answers POST /api/connections/{id}/test: run the
 // connector's read-only test action with this connection.
 func (h *connectionsHandlers) testConnection(c *gin.Context) {
-	conn, def, ok := h.loadConnection(c, true)
+	conn, def, ok := h.loadConnection(c, true, true)
 	if !ok {
 		return
 	}
@@ -302,6 +331,12 @@ func (h *connectionsHandlers) testConnection(c *gin.Context) {
 func respondConnectionError(c *gin.Context, err error) {
 	if err == repo.ErrConnectionNotFound {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if errors.Is(err, repo.ErrStoredSecretsUnreadable) {
+		// The detail names the row and the key variables, for operators.
+		log.Printf("connections: %v", err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "the connection's credentials cannot be decrypted; ask a platform administrator to check the encryption key"})
 		return
 	}
 	respond(c, err)

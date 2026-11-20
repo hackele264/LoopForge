@@ -142,6 +142,7 @@ import runpy
 runpy.run_path('scripts/install-address.py')['access_addresses']('8090')
 PY
 mkdir -p "$LOOPFORGE_DATA_DIR/home" "$LOOPFORGE_DATA_DIR/workspaces" || fail 'The data directory is not writable. Set LOOPFORGE_DATA_DIR in .env to a directory owned by this user.'
+bash scripts/ensure-secret-key.sh || fail 'Could not create the credential encryption key in the data directory.'
 port="${AGENTFLOW_HTTP_PORT:-8090}"
 if ! docker_access compose ps --status running --services 2>/dev/null | grep -qx platform; then
   if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then

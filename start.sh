@@ -45,6 +45,8 @@ PY
       [[ -f .env ]] || docker_access_fail 'Not installed yet. Run ./start.sh first.'
       select_docker_access || docker_access_fail 'Docker is not running, or this user cannot access it.'
     fi
+    # Releases before credential encryption had no key file; create it once.
+    bash scripts/ensure-secret-key.sh
     if mirror_published_ghcr always; then
       compose pull --policy always mysql
     else

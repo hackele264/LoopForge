@@ -104,9 +104,15 @@ An action node may only use a connection of its run's project. Secrets never
 enter a template, a node configuration or a log line: authentication is
 applied after the request is built, and secret values are replaced with
 `[redacted]` in any error message. Requests never follow a redirect to
-another host, so header credentials cannot leak through one. Secrets are
-stored in the database without encryption, like the platform's other
-credentials; restrict database access accordingly.
+another host, so header credentials cannot leak through one.
+
+Secrets are encrypted at rest with AES-256-GCM when the platform has a key
+(`AGENTFLOW_SECRET_KEY_FILE`, created by the installer); each value is bound
+to its connection, so it cannot be copied to another row. A connection whose
+secrets cannot be decrypted is refused (HTTP 503, or a failed action node);
+it is never used with empty secrets. Without a key, secrets are stored in
+plaintext and the platform logs a warning at startup. See
+[credential encryption](security.md#credential-encryption-at-rest).
 
 ## Rate limits and retries
 
@@ -262,7 +268,11 @@ cannot push to a webhook: see [pull alert sources](alert-sources.md).
 Table `connections` is created by gorm's incremental AutoMigrate;
 `migrations/042_connections.sql` is the manual equivalent. Rate limit and
 retry settings are fields of the stored JSON payload and need no DDL
-(`migrations/046_phase6_backpressure.sql`).
+(`migrations/046_phase6_backpressure.sql`). With a key configured,
+`connections.secrets` holds a JSON string `"lfenc:v1:<key id>:<base64>"`
+instead of the JSON object, so the column type is unchanged. Rows written
+before the key was configured stay readable; `loopforge-secrets encrypt`
+seals them ([deployment](deployment.md#credential-encryption)).
 
 ## Not covered yet
 
@@ -270,7 +280,6 @@ retry settings are fields of the stored JSON payload and need no DDL
   processes or with other systems using the same vendor account.
 - Response actions are not retried on 5xx or transport errors; the node's
   `maxAttempts` decides whether the whole action runs again.
-- Secrets are not encrypted at rest.
 - Read-only connector actions are not offered to Agents as MCP tools; an
   Agent can use a vendor's own MCP server instead.
 - No loop over a list (for example one lookup per extracted IP); look up the

@@ -21,8 +21,8 @@ func TestConnectionsKeepSecretsOutOfLists(t *testing.T) {
 	if err := s.PutConnection(domain.Connection{ID: "cn-2", ProjectID: "sec", ConnectorID: "shodan", Name: "s", CreatedAt: now.Add(time.Second), UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := s.Connection("cn-1")
-	if !ok || got.Secrets["api_key"] != "k1" || len(got.SecretsSet) != 1 || got.SecretsSet[0] != "api_key" || got.Params["a"] != "b" {
+	got, err := s.Connection("cn-1")
+	if err != nil || got.Secrets["api_key"] != "k1" || len(got.SecretsSet) != 1 || got.SecretsSet[0] != "api_key" || got.Params["a"] != "b" {
 		t.Fatalf("connection = %+v", got)
 	}
 	list, err := s.Connections("sec", "")
