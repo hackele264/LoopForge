@@ -313,7 +313,7 @@ function nodeMeta(n){
     const tags=!n.sopWorkflowId?[{text:'未选择流程',warn:true}]:!wf?[{text:'流程不可用',warn:true}]:[{text:arts.length?`交给下一步：${arts.join('、')}`:'产物交给下一步'}];
     return {kind:'sop',subtitle:wf?.name||(n.sopWorkflowId?'流程不可用':'未选择流程'),tags};
   }
-  return {kind:'approval',subtitle:'人工门禁',tags:[{text:flowApproverSummary(n.approvers)||'等待人工确认'}]};
+  return {kind:'approval',subtitle:'人工门禁',tags:[{text:flowApproverSummary(n.approvers)||'等待人工确认'},...approvalRuleTags(n.approval).map(text=>({text})),...(approvalRuleProblem(n)?[{text:approvalRuleProblem(n),warn:true}]:[])]};
 }
 // Branching badges shown on every node kind: its RunIf and join strategy.
 function flowBranchTags(n){
@@ -1160,6 +1160,7 @@ function bindBranchFields(host,n){
     dirty();renderCanvas();
   };
   ids&&(ids.oninput=syncApprovers);roleBoxes.forEach(b=>b.onchange=syncApprovers);
+  bindApprovalRuleFields(host,n);
 }
 function renderProperties(){
   const host=$('#properties');if(!host)return;
@@ -1178,7 +1179,7 @@ function renderProperties(){
     const scriptCountText=scriptLines?`已编写 ${scriptLines} 行 (${n.scriptLanguage==='python'?'Python':'Shell'})`:'未配置 (点击编写)';
     const scriptPreview=scriptLines?`<div class="script-snippet-preview" id="previewScriptNodeEditor" title="点击在代码编辑器中修改"><code>${escapeHTML(n.script.slice(0, 120))}${n.script.length>120?'…':''}</code></div>`:'';
     const scriptPane=n.type==='script'?`<div class="fd-row2"><div class="fd-field"><label>脚本语言</label><select class="select" data-p="scriptLanguage"><option value="shell" ${n.scriptLanguage!=='python'?'selected':''}>Shell</option><option value="python" ${n.scriptLanguage==='python'?'selected':''}>Python</option></select></div><div class="fd-field"><label>执行范围</label><select class="select" data-p="executionScope"><option value="run" ${n.executionScope!=='repositories'?'selected':''}>Run 工作区</option><option value="repositories" ${n.executionScope==='repositories'?'selected':''}>每个代码仓库</option></select></div></div><div class="fd-field"><label>脚本内容</label><button type="button" class="script-editor-launch-btn btn-open-code-editor" id="openScriptNodeEditor"><span>${flowPalette.icon('code',14)} 打开代码编辑器编写脚本</span><span class="script-btn-badge">${scriptCountText}</span></button>${scriptPreview}<p class="prop-hint">逐仓库执行时会自动进入每个仓库根目录，无需手写 cd。</p></div>`:'';
-    const approvalPane=n.type==='approval'?`<div class="fd-field"><label>需要确认什么（可选）</label><textarea class="input" rows="4" data-p="taskPrompt" placeholder="例如：检查 MR 的改动范围和测试结果，确认可以上线">${escapeHTML(n.taskPrompt||'')}</textarea><p class="prop-hint">确认步骤会停在「待我确认」，批准后才继续；这段说明会和上下游一起展示给确认人。</p></div>${flowApproverFieldHTML(n)}`:'';
+    const approvalPane=n.type==='approval'?`<div class="fd-field"><label>需要确认什么（可选）</label><textarea class="input" rows="4" data-p="taskPrompt" placeholder="例如：检查 MR 的改动范围和测试结果，确认可以上线">${escapeHTML(n.taskPrompt||'')}</textarea><p class="prop-hint">确认步骤会停在「待我确认」，批准后才继续；这段说明会和上下游一起展示给确认人。</p></div>${flowApproverFieldHTML(n)}${approvalRuleFieldHTML(n)}`:'';
     const actionPane=n.type==='action'?flowActionPaneHTML(n):'';
     const main=`<section class="fd-sec"><div class="fd-sec-h"><span class="fd-sec-t">主配置</span></div><div class="fd-sec-b">${n.type==='agent'?agentBindCard(n):''}${sopSelect}${scriptPane}${approvalPane}${actionPane}</div></section>${flowBranchSectionHTML(n)}`;
     const gates=n.type==='agent'?flowFold('gates','校验顺序',`${effectiveNodeArtifacts(n,workflowAgent(n.agentId)).length} 产物 · ${roleGates(workflowAgent(n.agentId)).length} 门禁`,nodeGatePane(n),false):'';

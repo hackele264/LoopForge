@@ -3904,11 +3904,23 @@ paths:
     post:
       tags: [Runs]
       operationId: approveRunNode
+      description: Approves a waiting node. A node with an approval rule (`approval` on the workflow node) answers with its progress; with `requiredApprovals` above 1 the node keeps waiting until enough distinct named users approved, and the same user approving twice gets 409.
       requestBody:
         $ref: "#/components/requestBodies/NodeAction"
       responses:
         "200":
-          $ref: "#/components/responses/Ok"
+          description: Approval recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  approval:
+                    $ref: "#/components/schemas/ApprovalProgress"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -6724,8 +6736,80 @@ components:
           type: integer
         maxReworks:
           type: integer
+        approvers:
+          $ref: "#/components/schemas/ApproverPolicy"
+        approval:
+          $ref: "#/components/schemas/ApprovalRule"
         position:
           $ref: "#/components/schemas/OpenObject"
+    ApproverPolicy:
+      type: object
+      description: Who may decide an approval node. Empty keeps the legacy rule (any project writer).
+      properties:
+        userIds:
+          type: array
+          items: {type: integer, format: int64}
+        roles:
+          type: array
+          items: {type: string, enum: [owner, maintainer, member, admin]}
+    ApprovalRule:
+      type: object
+      description: Two-person approval and timed escalation for an approval node. Every field is optional; absent keeps a single decision with no deadline.
+      properties:
+        requiredApprovals:
+          type: integer
+          minimum: 1
+          maximum: 3
+          description: Distinct named users who must approve. At most the number of listed users when the approver policy lists only users. One rejection decides immediately.
+        timeoutMinutes:
+          type: integer
+          minimum: 1
+          maximum: 43200
+          description: Deadline counted from when the node starts waiting.
+        onTimeout:
+          type: string
+          enum: [escalate, reject]
+          description: Required with timeoutMinutes. escalate lets escalateTo decide too and sends the waiting reminders again; reject sends the run back to rejectTo while its rework budget lasts (maxReworks, at least 1), otherwise fails the node (error edges apply).
+        escalateTo:
+          $ref: "#/components/schemas/ApproverPolicy"
+    ApprovalVote:
+      type: object
+      properties:
+        userId: {type: integer, format: int64}
+        login: {type: string}
+        kind: {type: string}
+        at: {type: string, format: date-time}
+        escalation: {type: boolean, description: Approved as an escalation approver}
+    ApprovalState:
+      type: object
+      readOnly: true
+      description: Progress of an approval node with an approval rule; recreated each time the node starts waiting.
+      properties:
+        required: {type: integer}
+        votes:
+          type: array
+          items: {$ref: "#/components/schemas/ApprovalVote"}
+        deadline: {type: string, format: date-time}
+        onTimeout: {type: string, enum: [escalate, reject]}
+        escalated: {type: boolean}
+        escalatedAt: {type: string, format: date-time}
+        timedOut: {type: boolean, description: The system rejected the node at the deadline}
+    ApprovalProgress:
+      type: object
+      required: [approved, approvals, required]
+      properties:
+        approved:
+          type: boolean
+          description: True once the node passed; false while it waits for more approvals.
+        approvals: {type: integer}
+        required: {type: integer}
+        votes:
+          type: array
+          items: {$ref: "#/components/schemas/ApprovalVote"}
+        deadline: {type: string, format: date-time}
+        onTimeout: {type: string, enum: [escalate, reject]}
+        escalated: {type: boolean}
+        escalatedAt: {type: string, format: date-time}
     WorkflowEdge:
       type: object
       required: [id, source, target]
@@ -6889,6 +6973,8 @@ components:
           $ref: "#/components/schemas/TokenUsage"
         toolCalls:
           type: integer
+        approval:
+          $ref: "#/components/schemas/ApprovalState"
     TokenUsage:
       type: object
       properties:

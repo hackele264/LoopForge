@@ -48,6 +48,9 @@ func ValidateWorkflowBranching(wf WorkflowDefinition) error {
 				}
 			}
 		}
+		if err := validateApprovalRule(n); err != nil {
+			return err
+		}
 		src := strings.TrimSpace(n.RunIf)
 		if src == "" {
 			continue

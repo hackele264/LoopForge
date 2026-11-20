@@ -90,6 +90,10 @@ type WorkflowNode struct {
 	// Approvers restricts who may decide an approval node. Nil keeps the
 	// legacy rule: any project writer may decide.
 	Approvers *ApproverPolicy `json:"approvers,omitempty"`
+	// Approval adds two-person approval and timed escalation to an approval
+	// node. Nil keeps a single decision with no deadline. See
+	// workflow_approval.go.
+	Approval *ApprovalRule `json:"approval,omitempty"`
 	// Action configures an action node: a connector action the platform runs
 	// itself, outside any sandbox. See internal/connector.
 	Action *NodeAction `json:"action,omitempty"`

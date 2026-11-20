@@ -27,9 +27,10 @@ func requireNamedApprovals() bool {
 // platform requires named approvals.
 func (e *Engine) authorizeDecision(r domain.Run, nodeID string, actor domain.Actor) error {
 	var policy *domain.ApproverPolicy
+	var rule *domain.ApprovalRule
 	for _, n := range workflowForRun(e.repo, r).Nodes {
 		if n.ID == nodeID {
-			policy = n.Approvers
+			policy, rule = n.Approvers, n.Approval
 			break
 		}
 	}
@@ -37,9 +38,8 @@ func (e *Engine) authorizeDecision(r domain.Run, nodeID string, actor domain.Act
 		if !actor.Named() {
 			return apperr.New(apperr.Forbidden, "该人工关口只接受具名用户审批")
 		}
-		project, _ := e.repo.Project(r.ExecutionContext.ProjectID)
-		admin := strings.TrimSpace(actor.Login) != "" && e.repo.IsPlatformAdmin(actor.Login)
-		if !policy.Allows(actor, project, admin) {
+		// After an escalation the escalation approvers may decide too.
+		if !policy.Allows(actor, e.decisionProject(r), e.actorIsPlatformAdmin(actor)) && !e.escalationAllows(r, nodeID, rule, actor) {
 			return apperr.New(apperr.Forbidden, "你不在该人工关口的审批人名单中")
 		}
 		return nil

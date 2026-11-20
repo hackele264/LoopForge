@@ -121,6 +121,7 @@ func (e *Engine) StartMaintenance(ctx context.Context) {
 		go e.reclaimSandboxes()
 		go e.sandboxSweep(ctx)
 		go e.observationFlushLoop(ctx)
+		go e.approvalTimeoutLoop(ctx)
 	})
 }
 

@@ -178,6 +178,9 @@ type NodeRun struct {
 	// DecidedBy / DecidedAt record who last approved, rejected or passed it.
 	DecidedBy int64     `json:"decidedBy,omitempty"`
 	DecidedAt time.Time `json:"decidedAt,omitzero"`
+	// Approval is the vote and deadline progress of an approval node with an
+	// ApprovalRule.
+	Approval *ApprovalState `json:"approval,omitempty"`
 }
 
 // Node statuses introduced for conditional workflows.
@@ -199,6 +202,7 @@ func (n *NodeRun) ResetBranchState() {
 	n.ErrorRouted = false
 	n.DecidedBy = 0
 	n.DecidedAt = time.Time{}
+	n.Approval = nil
 }
 
 // SettledOK reports whether a node no longer blocks a successful run: it

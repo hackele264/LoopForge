@@ -399,7 +399,7 @@ func notificationTrigger(eventType string) string {
 		return "succeeded"
 	case "node.failed", "agent.turns.declined":
 		return "failed"
-	case "approval.waiting", "gate.waiting", "agent.turns.exhausted", "agent.loop.exhausted", "node.paused":
+	case "approval.waiting", "gate.waiting", "gate.escalated", "agent.turns.exhausted", "agent.loop.exhausted", "node.paused":
 		return "waiting"
 	default:
 		return ""

@@ -455,6 +455,7 @@ function runBranchFactsHTML(nr){
   const rows=[];
   if(nr.status==='skipped')rows.push(['跳过原因',nr.skipReason==='condition_false'?'执行条件不成立':'上游分支没有走到这里']);
   if(nr.status==='failed'&&nr.errorRouted)rows.push(['失败处理','已交给失败分支，运行继续']);
+  if(typeof approvalProgressRows==='function')rows.push(...approvalProgressRows(nr));
   if(nr.decidedBy)rows.push(['决定人',`用户 #${nr.decidedBy}${nr.decidedAt?` · ${new Date(nr.decidedAt).toLocaleString()}`:''}`]);
   const data=nr.data&&typeof nr.data==='object'?JSON.stringify(nr.data,null,2):'';
   if(!rows.length&&!data)return '';
@@ -1537,10 +1538,13 @@ async function previewArtifact(run,artifactId){
 async function runAction(id,action,body){
   if(action!=='cancel'&&queuedRunActionBlocked(id))return;
   try{
+    let res;
     if(action==='retry'||action==='resume')await requestRunActivation(id,action,body);
-    else await api(`/api/runs/${encodeURIComponent(id)}/${action}`,{method:'POST',body:JSON.stringify(body)});
+    else res=await api(`/api/runs/${encodeURIComponent(id)}/${action}`,{method:'POST',body:JSON.stringify(body)});
     const run=await syncRunControlState(id);
     await refreshRuns(true);
+    const partial=action==='approve'&&typeof approvalToast==='function'?approvalToast(res):'';
+    if(partial)return toast(partial,'ok');
     toast(action==='cancel'&&run.status==='cancelled'?(run.admissionState==='unstarted'?'已取消排队':'运行已取消'):runControlToast(run,action==='approve'?'已批准，流程继续':action==='reject'?'已打回，开始返工':action==='retry'?'已从中断处继续':'已选择不重试'));
   }catch(e){toast(e.message)}
 }
