@@ -25,7 +25,16 @@ type Connection struct {
 	// Splunk management port). CA checks are skipped unless TLSCAPEM is set.
 	TLSCertSHA256 string `json:"tlsCertSha256,omitempty"`
 	// TLSCAPEM is a PEM bundle of CAs trusted for this connection only.
-	TLSCAPEM   string    `json:"tlsCaPem,omitempty"`
+	TLSCAPEM string `json:"tlsCaPem,omitempty"`
+	// RateLimitPerSecond caps the requests one platform process sends
+	// through this connection; 0 is unlimited. RateLimitBurst is how many may
+	// go at once (0 means 1). Calls over the limit wait for their turn.
+	RateLimitPerSecond float64 `json:"rateLimitPerSecond,omitempty"`
+	RateLimitBurst     int     `json:"rateLimitBurst,omitempty"`
+	// MaxRetries is how many times a call is retried on HTTP 429, and for
+	// GET also on 5xx and transport errors; nil uses
+	// ConnectionDefaultRetries, 0 turns retries off.
+	MaxRetries *int      `json:"maxRetries,omitempty"`
 	SecretsSet []string  `json:"secretsSet,omitempty"`
 	CreatedBy  int64     `json:"createdBy,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -33,6 +42,22 @@ type Connection struct {
 	// Secrets is never serialized; only the repository and the action
 	// executor read it.
 	Secrets map[string]string `json:"-"`
+}
+
+// Connection rate and retry limits.
+const (
+	ConnectionDefaultRetries = 3
+	ConnectionMaxRetries     = 10
+	ConnectionMaxRate        = 1000
+	ConnectionMaxBurst       = 1000
+)
+
+// Retries is how many times a failed call may be retried.
+func (c Connection) Retries() int {
+	if c.MaxRetries == nil {
+		return ConnectionDefaultRetries
+	}
+	return *c.MaxRetries
 }
 
 // ValidateConnectionBase checks the fields that do not depend on the
@@ -60,6 +85,15 @@ func (c Connection) ValidateConnectionBase() error {
 		if block, _ := pem.Decode([]byte(c.TLSCAPEM)); block == nil || block.Type != "CERTIFICATE" {
 			return fmt.Errorf("tlsCaPem must hold PEM certificates")
 		}
+	}
+	if c.RateLimitPerSecond < 0 || c.RateLimitPerSecond > ConnectionMaxRate {
+		return fmt.Errorf("rateLimitPerSecond must be between 0 and %d", ConnectionMaxRate)
+	}
+	if c.RateLimitBurst < 0 || c.RateLimitBurst > ConnectionMaxBurst {
+		return fmt.Errorf("rateLimitBurst must be between 0 and %d", ConnectionMaxBurst)
+	}
+	if c.MaxRetries != nil && (*c.MaxRetries < 0 || *c.MaxRetries > ConnectionMaxRetries) {
+		return fmt.Errorf("maxRetries must be between 0 and %d", ConnectionMaxRetries)
 	}
 	if (c.TLSCertSHA256 != "" || c.TLSCAPEM != "") && strings.HasPrefix(strings.TrimSpace(c.BaseURL), "http://") {
 		return fmt.Errorf("TLS settings need an https:// baseUrl")

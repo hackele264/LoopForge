@@ -19,6 +19,7 @@ import (
 
 	"agentflow/internal/domain"
 	"agentflow/internal/expr"
+	"agentflow/internal/ratelimit"
 )
 
 const (
@@ -62,6 +63,11 @@ type Executor struct {
 	cases  CaseService
 	tokens *tokenCache
 	tls    tlsClients
+	// limitReg overrides the process-wide connection limits (tests).
+	limitReg *ratelimit.Registry
+	// retryBase and retryMaxWait override the retry timing (tests).
+	retryBase    time.Duration
+	retryMaxWait time.Duration
 }
 
 // NewExecutor returns an executor using client (nil for a default client)
@@ -315,7 +321,7 @@ func (x *Executor) executeHTTP(ctx context.Context, call Call, inputs map[string
 			query.Set(name, v)
 		}
 	}
-	var body io.Reader
+	var body []byte
 	contentType := ""
 	if a.Request.Body != nil {
 		rendered, err := renderValue(a.Request.Body, TemplateRoots, env)
@@ -326,7 +332,7 @@ func (x *Executor) executeHTTP(ctx context.Context, call Call, inputs map[string
 		if err != nil {
 			return Result{}, err
 		}
-		body, contentType = bytes.NewReader(raw), "application/json"
+		body, contentType = raw, "application/json"
 	} else if len(a.Request.Form) > 0 {
 		form := url.Values{}
 		for _, name := range sortedKeys(a.Request.Form) {
@@ -336,14 +342,12 @@ func (x *Executor) executeHTTP(ctx context.Context, call Call, inputs map[string
 			}
 			form.Set(name, v)
 		}
-		body, contentType = strings.NewReader(form.Encode()), "application/x-www-form-urlencoded"
+		body, contentType = []byte(form.Encode()), "application/x-www-form-urlencoded"
 	}
 	timeout := defaultTimeout
 	if a.TimeoutSeconds > 0 {
 		timeout = time.Duration(a.TimeoutSeconds) * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	headers := http.Header{}
 	headers.Set("Accept", "application/json")
 	headers.Set("User-Agent", "LoopForge-Connector/1")
@@ -357,43 +361,34 @@ func (x *Executor) executeHTTP(ctx context.Context, call Call, inputs map[string
 		}
 		headers.Set(name, v)
 	}
-	if err := x.applyAuth(ctx, c, conn, env, headers, query); err != nil {
-		return Result{}, err
-	}
-	target.RawQuery = query.Encode()
-	req, err := http.NewRequestWithContext(ctx, strings.ToUpper(a.Request.Method), target.String(), body)
+	authCtx, cancelAuth := context.WithTimeout(ctx, timeout)
+	err = x.applyAuth(authCtx, c, conn, env, headers, query)
+	cancelAuth()
 	if err != nil {
 		return Result{}, err
 	}
-	req.Header = headers
+	target.RawQuery = query.Encode()
 	client, err := x.clientFor(conn)
 	if err != nil {
 		return Result{}, err
 	}
-	resp, err := client.Do(req)
+	method := strings.ToUpper(a.Request.Method)
+	resp, retries, err := x.send(ctx, client, conn, method, target.String(), headers, body, timeout, a.Success, secretValues(c, conn))
 	if err != nil {
-		return Result{}, fmt.Errorf("%s 请求失败：%w", c.Title, err)
+		return Result{}, fmt.Errorf("%s 请求失败%s：%w", c.Title, retriedNote(retries), err)
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil {
-		return Result{}, fmt.Errorf("读取 %s 响应失败：%w", c.Title, err)
-	}
-	truncated := len(raw) > maxResponseBytes
-	if truncated {
-		raw = raw[:maxResponseBytes]
-	}
-	parsed := parseBody(raw, resp.Header.Get("Content-Type"), truncated)
-	if !accepted(a.Success, resp.StatusCode) {
-		return Result{}, fmt.Errorf("%s 返回 HTTP %d：%s", c.Title, resp.StatusCode, snippet(raw))
+	raw := resp.body
+	parsed := parseBody(raw, resp.header.Get("Content-Type"), resp.truncated)
+	if !accepted(a.Success, resp.status) {
+		return Result{}, fmt.Errorf("%s 返回 HTTP %d%s：%s", c.Title, resp.status, retriedNote(retries), snippet(raw))
 	}
 	respHeaders := map[string]any{}
-	for name, values := range resp.Header {
+	for name, values := range resp.header {
 		if len(values) > 0 {
 			respHeaders[strings.ToLower(name)] = values[0]
 		}
 	}
-	outEnv := map[string]any{"inputs": inputs, "response": map[string]any{"status": float64(resp.StatusCode), "headers": respHeaders, "body": parsed}}
+	outEnv := map[string]any{"inputs": inputs, "response": map[string]any{"status": float64(resp.status), "headers": respHeaders, "body": parsed}}
 	if strings.TrimSpace(a.FailIf) != "" {
 		program, err := expr.CompileWith(a.FailIf, OutputRoots)
 		if err != nil {
@@ -407,7 +402,7 @@ func (x *Executor) executeHTTP(ctx context.Context, call Call, inputs map[string
 			return Result{}, fmt.Errorf("%s 返回错误：%s", c.Title, snippet(raw))
 		}
 	}
-	output := map[string]any{"status": float64(resp.StatusCode), "body": parsed}
+	output := map[string]any{"status": float64(resp.status), "body": parsed}
 	for _, name := range a.OutputFields {
 		program, err := expr.CompileWith(a.Output[name], OutputRoots)
 		if err != nil {
@@ -419,8 +414,11 @@ func (x *Executor) executeHTTP(ctx context.Context, call Call, inputs map[string
 		}
 		output[name] = v
 	}
+	if _, declared := output["retries"]; len(retries) > 0 && !declared {
+		output["retries"] = retryLog(retries)
+	}
 	output = boundOutput(output)
-	return Result{Output: output, Summary: fmt.Sprintf("%s · %s：HTTP %d", c.Title, a.Title, resp.StatusCode)}, nil
+	return Result{Output: output, Summary: fmt.Sprintf("%s · %s：HTTP %d%s", c.Title, a.Title, resp.status, retriedNote(retries))}, nil
 }
 
 // boundOutput drops the raw body when the output would be too large to

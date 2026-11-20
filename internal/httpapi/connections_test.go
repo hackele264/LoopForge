@@ -188,3 +188,26 @@ func TestWorkflowSaveRejectsUngatedResponseAndForeignConnection(t *testing.T) {
 		t.Fatalf("valid: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestConnectionRateAndRetrySettings(t *testing.T) {
+	f := newWebhookFixture(t)
+	body := map[string]any{"projectId": "sec", "connectorId": "virustotal", "name": "VT", "secrets": map[string]string{"api_key": "k"},
+		"rateLimitPerSecond": 2.5, "rateLimitBurst": 4, "maxRetries": 1}
+	created := requestJSONAuthed[domain.Connection](t, f.h, f.owner, http.MethodPost, "/api/connections", body, http.StatusCreated)
+	if created.RateLimitPerSecond != 2.5 || created.RateLimitBurst != 4 || created.MaxRetries == nil || *created.MaxRetries != 1 {
+		t.Fatalf("created = %+v", created)
+	}
+	// Omitted fields keep their values; null restores the default retries.
+	updated := requestJSONAuthed[domain.Connection](t, f.h, f.owner, http.MethodPut, "/api/connections/"+created.ID, map[string]any{"name": "VT 2"}, http.StatusOK)
+	if updated.RateLimitPerSecond != 2.5 || updated.MaxRetries == nil {
+		t.Fatalf("update without the fields = %+v", updated)
+	}
+	updated = requestJSONAuthed[domain.Connection](t, f.h, f.owner, http.MethodPut, "/api/connections/"+created.ID, map[string]any{"maxRetries": nil, "rateLimitPerSecond": 0, "rateLimitBurst": 0}, http.StatusOK)
+	stored, _ := f.s.Connection(created.ID)
+	if updated.MaxRetries != nil || stored.Retries() != domain.ConnectionDefaultRetries || stored.RateLimitPerSecond != 0 {
+		t.Fatalf("reset = %+v", stored)
+	}
+	for _, bad := range []map[string]any{{"maxRetries": 11}, {"maxRetries": "x"}, {"rateLimitPerSecond": -1}, {"rateLimitBurst": 5000}} {
+		requestJSONAuthed[map[string]any](t, f.h, f.owner, http.MethodPut, "/api/connections/"+created.ID, bad, http.StatusBadRequest)
+	}
+}

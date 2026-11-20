@@ -18,6 +18,13 @@ assert.deepEqual(plain(context.webhookFormBody({projectId: 'p', workflowId: 'w',
   {projectId: 'p', workflowId: 'w', name: 'SIEM', enabled: true, methods: ['POST', 'GET'], allowedCidrs: ['10.0.0.0/8', '192.0.2.7'], titleField: 'alert.title', severityField: '', caseMode: '', dedupFields: ['alert.rule', 'alert.host', 'alert.rule'], signatureHeader: '', dedupWindowSeconds: 1800});
 const noDedup = plain(context.webhookFormBody({projectId: 'p', workflowId: 'w', name: 'n', dedupFields: '', dedupMinutes: '30', signingSecret: ' k ', signatureHeader: 'X-Sig', enabled: false}));
 assert.equal(noDedup.dedupWindowSeconds, undefined);
+assert.equal(noDedup.rateLimitPerMinute, undefined);
+const limited = plain(context.webhookFormBody({projectId: 'p', workflowId: 'w', name: 'n', rateLimitPerMinute: '30', rateLimitBurst: '5'}));
+assert.equal(limited.rateLimitPerMinute, 30);
+assert.equal(limited.rateLimitBurst, 5);
+const burstOnly = plain(context.webhookFormBody({projectId: 'p', workflowId: 'w', name: 'n', rateLimitPerMinute: '', rateLimitBurst: '5'}));
+assert.equal(burstOnly.rateLimitBurst, undefined);
+assert.equal(context.webhookDeliveryLabel({status: 'rate_limited'}), '超出限流');
 assert.equal(noDedup.signingSecret, 'k');
 assert.equal(noDedup.enabled, false);
 assert.deepEqual(noDedup.methods, ['POST']);

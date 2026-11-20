@@ -1,0 +1,18 @@
+-- Phase 6 backpressure: per-webhook alert rate limit, per-connection request
+-- rate limit and retry settings.
+--
+-- No schema change. The new settings are optional fields of the JSON
+-- documents already stored in existing columns, and read as "unset" (old
+-- behaviour) when absent:
+--
+--   webhooks.payload     rateLimitPerMinute, rateLimitBurst
+--   connections.payload  rateLimitPerSecond, rateLimitBurst, maxRetries
+--
+-- Webhook deliveries refused by the limit are logged in
+-- webhook_deliveries.payload with status "rate_limited".
+--
+-- Expired rows in webhook_dedup are now deleted hourly by every API process;
+-- the existing index on webhook_dedup.expires_at (migrations/040_webhooks.sql)
+-- serves that delete.
+--
+-- Nothing to run; this file records the change in the migration sequence.

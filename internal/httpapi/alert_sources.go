@@ -581,6 +581,9 @@ func (h *alertSourcesHandlers) pass(ctx context.Context, s domain.AlertSource) {
 	admitted := 0
 	origin := fmt.Sprintf("拉取源「%s」", s.Name)
 	var failed error
+	// deferred is set when the webhook's rate limit stopped the pass: the
+	// rest of the window is read again once the budget refills.
+	var deferred time.Duration
 	for _, item := range items {
 		key := alertItemKey(alertItemID(s, item))
 		fresh, err := h.repo.MarkAlertSourceItem(s.ID, key, time.Now().UTC())
@@ -605,12 +608,33 @@ func (h *alertSourcesHandlers) pass(ctx context.Context, s domain.AlertSource) {
 			failed = res.err
 			break
 		}
+		if res.rateLimited {
+			// Not admitted: forget it so the next pass, which rereads this
+			// window, admits it then.
+			_ = h.repo.ForgetAlertSourceItem(s.ID, key)
+			deferred = res.retryAfter
+			break
+		}
 		admitted++
 	}
 	state.LastFetched, state.LastAdmitted = len(items), admitted
 	state.TotalAdmitted += int64(admitted)
 	if failed != nil {
 		fail(fmt.Errorf("告警入库失败：%w", failed))
+		return
+	}
+	if deferred > 0 {
+		// Keep the checkpoint: the next pass reads the same window again,
+		// skipping alerts already admitted by their IDs. This is not a
+		// failure, so the backoff does not grow.
+		if deferred < time.Second {
+			deferred = time.Second
+		}
+		retryAt := time.Now().UTC().Add(deferred)
+		state.LastWarning = fmt.Sprintf("Webhook 限流：本轮入库 %d 条后达到每分钟 %d 条的上限，其余告警约 %d 秒后重新拉取", admitted, plan.webhook.RateLimitPerMinute, retryAfterSeconds(deferred))
+		state.Failures, state.LastError = 0, ""
+		state.LastSuccessAt, state.NextRunAt = &now, &retryAt
+		h.finish(s, state)
 		return
 	}
 	checkpoint := upper

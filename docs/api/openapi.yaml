@@ -3130,7 +3130,9 @@ paths:
         wrapped as {"body": value}. GET takes query parameters instead and PUT
         behaves like POST, when the webhook allows those methods. With
         dedupFields set, an alert whose fingerprint was seen within
-        dedupWindowSeconds answers 200 deduplicated and starts nothing.
+        dedupWindowSeconds answers 200 deduplicated and starts nothing. With
+        rateLimitPerMinute set, a new (non-duplicate) alert over the limit
+        answers 429 with Retry-After and is logged as rate_limited.
       requestBody:
         required: false
         content:
@@ -3177,6 +3179,27 @@ paths:
           description: Webhook disabled
         "413":
           description: Body too large
+        "429":
+          description: >-
+            The webhook's alert rate limit is spent; nothing was recorded but
+            the delivery. Send the alert again after Retry-After seconds.
+          headers:
+            Retry-After:
+              description: Seconds until the limit admits another alert.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [rate_limited]
+                  error:
+                    type: string
+                  retryAfterSeconds:
+                    type: integer
         "503":
           description: The run could not start
   /api/workflow-conditions/check:
@@ -6290,6 +6313,21 @@ components:
         tlsCaPem:
           type: string
           description: PEM CA certificates trusted for this connection only.
+        rateLimitPerSecond:
+          type: number
+          minimum: 0
+          maximum: 1000
+          description: Requests per second this connection may send from one platform process; 0 or absent is unlimited. Calls over the limit wait.
+        rateLimitBurst:
+          type: integer
+          minimum: 0
+          maximum: 1000
+          description: Requests that may go at once before rateLimitPerSecond applies; 0 means 1.
+        maxRetries:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 10
+          description: Retries on HTTP 429 (any method) and, for GET, on 5xx and transport errors, with exponential backoff or the vendor's Retry-After (at most 60 s). Absent or null uses 3; 0 turns retries off.
         createdBy:
           type: integer
         createdAt:
@@ -6328,6 +6366,21 @@ components:
         tlsCaPem:
           type: string
           description: PEM CA certificates trusted for this connection only.
+        rateLimitPerSecond:
+          type: number
+          minimum: 0
+          maximum: 1000
+          description: Requests per second this connection may send from one platform process; 0 is unlimited; omitted keeps the stored value. Calls over the limit wait.
+        rateLimitBurst:
+          type: integer
+          minimum: 0
+          maximum: 1000
+          description: Requests that may go at once before rateLimitPerSecond applies; 0 means 1.
+        maxRetries:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 10
+          description: Retries on HTTP 429 (any method) and, for GET, on 5xx and transport errors, with exponential backoff or the vendor's Retry-After (at most 60 s). Omitted keeps the stored value; null restores the default of 3; 0 turns retries off.
     NodeAction:
       type: object
       required: [connector, action]
@@ -6424,6 +6477,16 @@ components:
           minimum: 0
           maximum: 604800
           description: Dedup window; defaults to 3600 when dedupFields is set.
+        rateLimitPerMinute:
+          type: integer
+          minimum: 0
+          maximum: 60000
+          description: New alerts admitted per minute (duplicates absorbed by dedup do not count); 0 or absent is unlimited. Kept per platform process.
+        rateLimitBurst:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: Alerts admitted at once before the per-minute rate applies; 0 uses rateLimitPerMinute. Needs rateLimitPerMinute.
     Webhook:
       allOf:
         - $ref: "#/components/schemas/WebhookInput"
@@ -6458,7 +6521,7 @@ components:
           format: date-time
         status:
           type: string
-          enum: [started, deduplicated, rejected, failed]
+          enum: [started, deduplicated, rejected, rate_limited, failed]
         httpStatus:
           type: integer
         runId:

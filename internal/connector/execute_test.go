@@ -111,7 +111,7 @@ actions:
 `)
 	conn := &domain.Connection{ID: "cn", ConnectorID: c.ID, Name: "q", BaseURL: srv.URL, Secrets: map[string]string{"api_key": "TOPSECRET"}}
 	a, _ := c.Action("host")
-	_, err := NewExecutor(nil, nil).Execute(context.Background(), Call{Connector: c, Action: a, Connection: conn, Inputs: map[string]any{"ip": "1.2.3.4"}})
+	_, err := fastExecutor().Execute(context.Background(), Call{Connector: c, Action: a, Connection: conn, Inputs: map[string]any{"ip": "1.2.3.4"}})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
 		t.Fatalf("err = %v", err)
 	}
@@ -120,7 +120,7 @@ actions:
 	}
 	// A transport error carries the URL, query secret included.
 	conn.BaseURL = "http://127.0.0.1:1"
-	_, err = NewExecutor(nil, nil).Execute(context.Background(), Call{Connector: c, Action: a, Connection: conn, Inputs: map[string]any{"ip": "1.2.3.4"}})
+	_, err = fastExecutor().Execute(context.Background(), Call{Connector: c, Action: a, Connection: conn, Inputs: map[string]any{"ip": "1.2.3.4"}})
 	if err == nil || strings.Contains(err.Error(), "TOPSECRET") {
 		t.Fatalf("transport error leaked secret or did not fail: %v", err)
 	}

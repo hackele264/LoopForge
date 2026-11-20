@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -16,11 +17,14 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"agentflow/internal/domain"
 	"agentflow/internal/engine"
+	"agentflow/internal/ratelimit"
 
 	"github.com/gin-gonic/gin"
 )
@@ -31,7 +35,16 @@ import (
 type webhooksHandlers struct {
 	*deps
 	cases *casesHandlers
+	// limits holds each webhook's alert budget in this process; nil leaves
+	// every webhook unlimited.
+	limits *ratelimit.Registry
+	// purged counts fingerprints removed by the purge loop.
+	purged atomic.Int64
 }
+
+// webhookFingerprintPurgeEvery is how often expired dedup fingerprints are
+// deleted.
+const webhookFingerprintPurgeEvery = time.Hour
 
 const webhookIngressPrefix = "/api/hooks/"
 
@@ -404,6 +417,9 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 		respond(c, res.err)
 		return
 	}
+	if res.rateLimited {
+		c.Header("Retry-After", strconv.Itoa(retryAfterSeconds(res.retryAfter)))
+	}
 	c.JSON(res.status, res.body)
 }
 
@@ -413,6 +429,32 @@ type admission struct {
 	status int
 	body   gin.H
 	err    error
+	// rateLimited means the webhook's alert budget is spent; nothing was
+	// recorded but the delivery, and retryAfter is when a token frees up.
+	rateLimited bool
+	retryAfter  time.Duration
+}
+
+// takeAlertBudget takes one token from w's alert budget. It reports false
+// with the wait until the next token when the budget is spent.
+func (h *webhooksHandlers) takeAlertBudget(w domain.Webhook) (bool, time.Duration) {
+	if h.limits == nil || w.RateLimitPerMinute <= 0 {
+		return true, 0
+	}
+	bucket := h.limits.Bucket(w.ID, float64(w.RateLimitPerMinute)/60, w.AlertRateBurst())
+	if bucket == nil {
+		return true, 0
+	}
+	return bucket.Take(time.Now())
+}
+
+// retryAfterSeconds rounds a wait up to whole seconds, at least one.
+func retryAfterSeconds(d time.Duration) int {
+	secs := int((d + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
 }
 
 // admitAlert runs one alert through a webhook's deduplication, alert and
@@ -451,6 +493,19 @@ func (h *webhooksHandlers) admitAlert(w domain.Webhook, trigger []byte, plain an
 			}
 			return admission{status: http.StatusOK, body: gin.H{"status": domain.WebhookDeliveryDeduplicated, "runId": claim.RunID, "hits": claim.Hits, "alertId": alert.ID, "caseId": caseID}}
 		}
+	}
+	// The budget is checked after deduplication so duplicates never spend it.
+	if ok, wait := h.takeAlertBudget(w); !ok {
+		if fingerprint != "" {
+			// Free the claim so the alert, sent again, is not a duplicate of
+			// nothing.
+			_ = h.repo.ReleaseWebhookFingerprint(w.ID, fingerprint)
+		}
+		secs := retryAfterSeconds(wait)
+		message := fmt.Sprintf("rate limit of %d alerts per minute exceeded; retry after %ds", w.RateLimitPerMinute, secs)
+		delivery.Status, delivery.HTTPStatus, delivery.Message, delivery.AlertID = domain.WebhookDeliveryRateLimited, http.StatusTooManyRequests, message, ""
+		h.recordDelivery(*delivery)
+		return admission{status: http.StatusTooManyRequests, body: gin.H{"error": message, "status": domain.WebhookDeliveryRateLimited, "retryAfterSeconds": secs}, rateLimited: true, retryAfter: wait}
 	}
 	outcome, err := h.cases.recordAlert(w, alert, nil)
 	if err != nil {
@@ -504,6 +559,37 @@ func newAlertID(now time.Time) string {
 	raw := make([]byte, 6)
 	_, _ = rand.Read(raw)
 	return fmt.Sprintf("alert-%d-%s", now.UnixNano(), hex.EncodeToString(raw))
+}
+
+// startFingerprintPurge deletes expired dedup fingerprints every interval
+// until ctx ends. Expired rows are also reclaimed lazily when the same
+// fingerprint returns; this keeps fingerprints that never return from
+// piling up. Several processes may run it; the delete is idempotent.
+func (h *webhooksHandlers) startFingerprintPurge(ctx context.Context, every time.Duration) {
+	go func() {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.purgeExpiredFingerprints(time.Now().UTC())
+			}
+		}
+	}()
+}
+
+func (h *webhooksHandlers) purgeExpiredFingerprints(now time.Time) {
+	n, err := h.repo.PurgeExpiredWebhookFingerprints(now)
+	if err != nil {
+		log.Printf("[WEBHOOK] purge expired fingerprints: %v", err)
+		return
+	}
+	h.purged.Add(n)
+	if n > 0 {
+		log.Printf("[WEBHOOK] purged %d expired dedup fingerprints", n)
+	}
 }
 
 // recordDelivery logs a delivery; a logging failure never changes the
