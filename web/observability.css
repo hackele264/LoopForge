@@ -572,6 +572,23 @@ body.obs-expand-open{overflow:hidden}
 #casesView .case-head-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin:12px 0}
 #casesView .case-head-form .field{display:grid;gap:4px;font-size:12px;color:var(--muted)}
 #casesView .case-desc{font-size:13px;color:var(--muted);white-space:pre-wrap}
+#casesView .case-verdict{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;align-items:center;margin:8px 0;padding:8px 10px;border:1px solid var(--line-strong);border-radius:10px;font-size:12.5px}
+#casesView .case-verdict p{grid-column:1 / -1;margin:0;color:var(--muted);white-space:pre-wrap}
+#casesView .verdict-pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11.5px;font-weight:600}
+#casesView .verdict-malicious{background:rgba(220,38,38,.16);color:#dc2626}
+#casesView .verdict-benign,#casesView .verdict-false_positive{background:rgba(16,163,127,.14);color:rgb(16 163 127)}
+#casesView .verdict-needs_review{background:rgba(202,138,4,.15);color:#ca8a04}
+#casesView .case-ev.ev-agent_verdict{border-left-color:var(--blue)}
+#casesView .pilot-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px;margin-bottom:14px}
+#casesView .pilot-form .field{display:grid;gap:4px;font-size:12px;color:var(--muted)}
+#casesView .pilot-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+#casesView .pilot-card{padding:10px 12px;border:1px solid var(--line-strong);border-radius:10px;background:var(--panel)}
+#casesView .pilot-card b{display:block;font-size:20px;margin:2px 0}
+#casesView .pilot-card span{font-size:12px;color:var(--muted)}
+#casesView .pilot-card.ok b{color:rgb(16 163 127)}
+#casesView .pilot-card.bad b{color:rgb(220 38 38)}
+#casesView .pilot-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:14px}
+#casesView .pilot-table th,#casesView .pilot-table td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line-strong)}
 #casesView .case-tabs{display:flex;gap:4px;margin:8px 0;border-bottom:1px solid var(--line-strong)}
 #casesView .case-tabs button{border:0;background:none;padding:6px 10px;color:var(--muted);cursor:pointer;font:inherit;font-size:13px;border-bottom:2px solid transparent}
 #casesView .case-tabs button.active{color:var(--text);border-bottom-color:var(--blue)}

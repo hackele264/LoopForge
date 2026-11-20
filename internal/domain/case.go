@@ -43,6 +43,14 @@ type Case struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
 	ClosedAt   *time.Time `json:"closedAt,omitempty"`
+	// Agent verdict fields are set by a playbook's 记录研判结论 action
+	// (case_set_verdict); see case_verdict.go.
+	AgentVerdict        string     `json:"agentVerdict,omitempty"`
+	AgentConfidence     *float64   `json:"agentConfidence,omitempty"`
+	AgentRationale      string     `json:"agentRationale,omitempty"`
+	AgentVerdictRunID   string     `json:"agentVerdictRunId,omitempty"`
+	AgentVerdictAt      *time.Time `json:"agentVerdictAt,omitempty"`
+	AgentVerdictFirstAt *time.Time `json:"agentVerdictFirstAt,omitempty"`
 }
 
 // CaseIOC is an indicator extracted from a case's alerts or added by hand.
@@ -153,6 +161,9 @@ const (
 	// CaseEventApproval records a person approving or rejecting a step of
 	// a run on the case.
 	CaseEventApproval = "case.approval"
+	// CaseEventAgentVerdict records the verdict a playbook's triage step
+	// recorded on the case.
+	CaseEventAgentVerdict = "case.agent_verdict"
 )
 
 // CaseTriggerEvents lists the events a trigger may subscribe to.

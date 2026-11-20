@@ -29,7 +29,7 @@ Actions come in three categories:
 
 | Connector | Actions | Authentication |
 |---|---|---|
-| LoopForge 内置动作 | 提取 IOC, 案件评论, 更新案件, 案件添加 IOC | none |
+| LoopForge 内置动作 | 提取 IOC, 案件评论, 更新案件, 案件添加 IOC, 记录研判结论 | none |
 | VirusTotal | IP / 域名 / URL / 文件哈希信誉 | `x-apikey` header |
 | AbuseIPDB | IP 滥用检查 | `Key` header |
 | urlscan.io | 提交扫描, 查询结果, 搜索 | `API-Key` header |
@@ -286,6 +286,30 @@ auth:
 
 A response without the token fails the action with the vendor's `msg`, when
 it sends one.
+
+### 记录研判结论 (`loopforge.case_set_verdict`)
+
+Stores an agent's triage verdict on the run's case: `verdict` (malicious,
+benign, false_positive or needs_review), optional `confidence` (0 to 1) and
+`rationale`. The case keeps the latest verdict with its run
+(`agentVerdict`, `agentConfidence`, `agentRationale`, `agentVerdictRunId`,
+`agentVerdictAt`) and the time of the first (`agentVerdictFirstAt`), and the
+timeline gets `case.agent_verdict`. The verdict cannot be set through the
+case API, so it always comes from a run. It does not fire case triggers. The
+[pilot report](pilot.md) compares it with the analyst's resolution.
+
+Agent prompts may paste structured run data with `{{trigger}}` (the trigger
+payload), `{{node.<id>.data}}` (a node's structured result, such as the
+fields a connector action mapped out of its response) and `{{run.caseId}}`;
+`{{upstream}}` also carries each upstream node's structured result. JSON is
+shown as an indented block cut at 6,000 bytes, and a node without data reads
+empty. Trigger payloads and vendor responses can carry attacker-written text,
+so each pasted JSON block is fenced between `<<<DATA-… source=…` and
+`DATA-…>>>` markers whose boundary is derived from the run ID, with a note
+that the content is evidence, not instructions. A value cannot close its
+fence early, and placeholders inside pasted data are not expanded. The fence
+lowers the risk of prompt injection but does not remove it: keep response
+actions behind an approval.
 
 Read-only actions can also feed alerts in on a schedule, for products that
 cannot push to a webhook: see [pull alert sources](alert-sources.md).

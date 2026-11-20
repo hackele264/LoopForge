@@ -2024,7 +2024,7 @@ func TestRenderPromptShowsUpstreamActionData(t *testing.T) {
 		`"malicious": 14`,
 		`"suspicious": 2`,
 		`"subject": "密码将于今日过期"`,
-		"VT：\n```json\n{",
+		"VT：\n<<<" + promptDataBoundary(run.ID) + " source=node.vt_url",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt does not contain %q:\n%s", want, got)

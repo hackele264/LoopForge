@@ -584,6 +584,29 @@ paths:
                 items: {$ref: "#/components/schemas/AuditEvent"}
         "403":
           description: Not a platform administrator, or a token without the admin scope
+  /api/pilot-report:
+    get:
+      tags: [Webhooks]
+      operationId: getPilotReport
+      summary: Shadow-mode pilot report for one project (project owner or platform administrators)
+      description: Alerts, runs, connector action success rates, alert-to-verdict latency and agent verdict / case resolution agreement for cases opened in the range. Definitions are in docs/pilot.md and in the response's `definitions`.
+      parameters:
+        - {name: projectId, in: query, required: true, schema: {type: string}}
+        - {name: from, in: query, schema: {type: string}, description: RFC 3339 time or YYYY-MM-DD; default 14 days before to}
+        - {name: to, in: query, schema: {type: string}, description: Exclusive upper bound; a date includes that whole day; default now. At most 92 days after from}
+        - {name: format, in: query, schema: {type: string, enum: [json, csv], default: json}}
+      responses:
+        "200":
+          description: The report (JSON object, or metric,value CSV rows as an attachment)
+          content:
+            application/json:
+              schema: {type: object}
+            text/csv:
+              schema: {type: string}
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Not the project owner or a platform administrator, or a token not covering the project
   /api/audit/export:
     get:
       tags: [System]
@@ -5958,7 +5981,7 @@ components:
           type: string
         prompt:
           type: string
-          description: The role's single free-form brief (who it is, what to do, order, limits). Runtime placeholders such as {{input}}, {{repository}}, {{artifacts}}, {{feedback}}, {{upstream}} (upstream outputs plus each upstream node's structured result), {{trigger}} (the run's trigger payload as JSON) and {{node.<id>.data}} (a node's structured result as JSON) are substituted per run; deliverable, gate and retry sections are added from artifactOutputs, verification and node policy.
+          description: The role's single free-form brief (who it is, what to do, order, limits). Runtime placeholders such as {{input}}, {{repository}}, {{artifacts}}, {{feedback}}, {{upstream}} (upstream outputs plus each upstream node's structured result), {{trigger}} (the run's trigger payload as JSON) and {{node.<id>.data}} (a node's structured result as JSON) and {{run.caseId}} are substituted per run, with pasted JSON fenced as untrusted data; deliverable, gate and retry sections are added from artifactOutputs, verification and node policy.
         rules:
           type: array
           items:
@@ -6152,6 +6175,22 @@ components:
         resolution:
           type: string
           enum: [false_positive, resolved, duplicate]
+        agentVerdict:
+          type: string
+          enum: [malicious, benign, false_positive, needs_review]
+          description: Set only by a playbook's loopforge.case_set_verdict action; read-only here
+        agentConfidence:
+          type: number
+        agentRationale:
+          type: string
+        agentVerdictRunId:
+          type: string
+        agentVerdictAt:
+          type: string
+          format: date-time
+        agentVerdictFirstAt:
+          type: string
+          format: date-time
         assigneeId:
           type: integer
         tags:
