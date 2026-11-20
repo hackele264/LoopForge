@@ -522,3 +522,11 @@ body.obs-expand-open{overflow:hidden}
 @media (prefers-reduced-motion:reduce){
   .obs-chart-skeleton{animation:none}
 }
+
+/* conditional workflows on the run page */
+.graph-legend i.skipped{background:transparent;border:1px dashed var(--muted-2)}
+.graph-node.skipped{border-style:dashed;opacity:.6}
+.status.skipped{background:rgba(148,163,184,.1);color:var(--muted)}
+.node-branch-facts{display:grid;gap:8px;margin:10px 0}
+.node-branch-facts>div:not(.node-output){display:flex;justify-content:space-between;gap:12px;font-size:12.5px}
+.node-branch-facts>div:not(.node-output) span{color:var(--muted)}

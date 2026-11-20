@@ -80,6 +80,13 @@ func (e *Engine) nodeFailedAt(runID string, node domain.WorkflowNode, attempt, g
 			e.event(r, node.ID, "node.failed", err.Error())
 		}
 		shouldReject = !configurationFailure && allowReject && nr.Status == "failed" && node.RejectTo != "" && r.Nodes[node.RejectTo] != nil && r.Nodes[node.RejectTo].ReworkCount < max(1, node.MaxReworks)
+		// Precedence: automatic retry > reject to RejectTo > error edge > run
+		// failure. A configuration failure is an operator problem, so it is
+		// never routed into the workflow's own error handling.
+		if nr.Status == "failed" && !shouldReject && !configurationFailure && hasErrorEdge(workflowForRun(e.repo, *r), node.ID) {
+			nr.ErrorRouted = true
+			e.event(r, node.ID, "node.error_routed", "失败已交给错误分支处理")
+		}
 	})
 	if shouldReject {
 		_ = e.Reject(runID, domain.RejectRequest{NodeID: node.ID, TargetID: node.RejectTo, Reason: "节点失败自动打回：" + err.Error()})

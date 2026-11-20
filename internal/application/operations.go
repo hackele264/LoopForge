@@ -87,6 +87,7 @@ func PublicOperations() []Operation {
 		{Name: "workflows_revision_restore", Description: "Restore an SOP workflow revision", Method: "POST", Path: "/api/workflows/{id}/revisions/{revisionId}/restore"},
 		{Name: "workflows_publish", Description: "Publish an SOP workflow version", Method: "POST", Path: "/api/workflows/{id}/publish"},
 		{Name: "workflows_clone", Description: "Clone an SOP workflow", Method: "POST", Path: "/api/workflows/{id}/clone"},
+		{Name: "workflows_condition_check", Description: "Dry-run a SOP node runIf condition against sample trigger and upstream node data; reads nothing stored and runs nothing. Pass workflow and nodeId to also check it only reads upstream nodes.", Method: "POST", Path: "/api/workflow-conditions/check", ReadOnly: true},
 		{Name: "workflow_metrics_get", Description: "Get SOP workflow operating metrics", Method: "GET", Path: "/api/workflow-metrics", ReadOnly: true},
 		{Name: "analytics_get", Description: "Get usage and delivery analytics", Method: "GET", Path: "/api/analytics", ReadOnly: true},
 		{Name: "observability_spec_get", Description: "Get the LoopForge observability contract", Method: "GET", Path: "/api/observability/spec", ReadOnly: true},

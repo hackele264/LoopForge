@@ -390,7 +390,7 @@ func (h *roomsHandlers) decide(c *gin.Context) {
 	var err error
 	body := ""
 	if req.Action == "approve" {
-		err = h.engine.Approve(req.RunID, req.NodeID, req.Reason)
+		err = h.engine.ApproveAs(req.RunID, req.NodeID, req.Reason, h.requestActor(c.Request))
 		body = "批准了「" + nodeName + "」"
 	} else {
 		target := roomRejectTarget(run.WorkflowSnapshot, req.NodeID)
@@ -398,7 +398,7 @@ func (h *roomsHandlers) decide(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "「" + nodeName + "」前面没有可以打回的步骤，也没有配置打回目标，只能批准或到运行详情里取消"})
 			return
 		}
-		err = h.engine.Reject(req.RunID, domain.RejectRequest{NodeID: req.NodeID, TargetID: target, Reason: req.Reason})
+		err = h.engine.RejectAs(req.RunID, domain.RejectRequest{NodeID: req.NodeID, TargetID: target, Reason: req.Reason}, h.requestActor(c.Request))
 		body = "打回了「" + nodeName + "」"
 	}
 	if err != nil {

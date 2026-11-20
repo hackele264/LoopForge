@@ -126,3 +126,48 @@ func appendSubmitGateInstruction(prompt, rejectTarget string, retry bool) string
 
 必须根据当前真实情况选择，不要把 fail 当成 rework，也不要用 human 掩盖明确失败。reason 必须解释作出该终态的事实依据；rework 可用 actionRequired 写清返工要求；可附带 findings 和 evidence。不要用报告文本或最终回复代替工具调用。只有该工具调用成功，本节点才算完成。`, reworkInstruction)
 }
+
+const agentOutputArtifactName = "agentflow-node-output"
+
+// agentOutputPath is where submit_output writes an agent node's structured
+// output for one attempt, next to its gate result.
+func agentOutputPath(nodeID string, attempt int) string {
+	return filepath.ToSlash(filepath.Join(".agentflow", "node-outputs", safeRunnerPath(nodeID), fmt.Sprintf("attempt-%d.json", attempt)))
+}
+
+func agentOutputContract(path string) domain.ArtifactContract {
+	return domain.ArtifactContract{Name: agentOutputArtifactName, Path: path, MediaType: "application/json", Required: false}
+}
+
+// readAgentOutput loads an agent's submit_output payload and validates it
+// again on the control plane; the gate MCP refuses a pass without it, so a
+// missing file means an executor that bypassed the tool.
+func readAgentOutput(outputs nodeOutputs, path string, node domain.WorkflowNode) (domain.RawJSON, error) {
+	raw, err := outputs.readFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("structured output: 节点声明了 outputSchema，但 Agent 没有调用 submit_output")
+		}
+		return "", fmt.Errorf("structured output: %w", err)
+	}
+	data, err := domain.ValidateNodeOutput(node.OutputSchema, raw)
+	if err != nil {
+		return "", fmt.Errorf("structured output: %w", err)
+	}
+	return data, nil
+}
+
+// appendSubmitOutputInstruction tells an agent node with a declared output
+// schema to submit its structured result before a pass decision.
+func appendSubmitOutputInstruction(prompt string, schema json.RawMessage, retry bool) string {
+	if retry {
+		return strings.TrimRight(prompt, "\n") + "\n如果选择 pass，请先调用 submit_output 提交符合 schema 的结构化结果（若尚未提交），再调用 submit_gate_result。"
+	}
+	return strings.TrimRight(prompt, "\n") + fmt.Sprintf(`
+
+# 必须提交结构化结果
+
+本节点声明了输出结构，下游步骤会按其中的字段决定走哪条分支。选择 pass 之前，必须先调用 MCP 工具 submit_output，提交一个符合下面 JSON Schema 的对象；未提交时 submit_gate_result 的 pass 会被拒绝。结果只能提交一次，校验失败时按报错修正后重交。只填你有事实依据的字段，不要编造。
+
+`+"```json\n%s\n```", strings.TrimSpace(string(schema)))
+}

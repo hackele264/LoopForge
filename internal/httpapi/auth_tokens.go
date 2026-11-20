@@ -90,6 +90,16 @@ func protectedAccessPath(path string) bool {
 	}
 }
 
+// requestActor attributes a human control action (approve, reject, pass) to
+// the signed-in user or the owner of the presented API token. A request that
+// passed authentication without a user identity is a service caller.
+func (d deps) requestActor(r *http.Request) domain.Actor {
+	if user, ok := d.requestUser(r, true); ok && user != nil && user.ID > 0 {
+		return domain.Actor{UserID: user.ID, Kind: domain.ActorUser, Login: user.LoginName}
+	}
+	return domain.Actor{Kind: domain.ActorService}
+}
+
 // requestUser 挂 deps（token 鉴权与多个领域共用）。It resolves a signed
 // browser session or a user API token. Gateway identity headers are resolved
 // by authCurrent, which exchanges them for the signed HttpOnly browser cookie.

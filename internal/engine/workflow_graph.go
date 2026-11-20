@@ -8,25 +8,31 @@ import (
 	"strings"
 )
 
+// readyNodes returns the pending nodes that may start now: their incoming
+// edges allow it (see workflow_branch.go) and their RunIf holds. Nodes that
+// must be skipped or failed instead are applied by settleBranches.
 func readyNodes(wf domain.WorkflowDefinition, r domain.Run) []domain.WorkflowNode {
-	deps := map[string][]string{}
-	for _, e := range wf.Edges {
-		deps[e.Target] = append(deps[e.Target], e.Source)
+	incoming := incomingEdges(wf)
+	var envCache map[string]any
+	env := func() map[string]any {
+		if envCache == nil {
+			envCache = conditionEnv(r)
+		}
+		return envCache
 	}
 	out := []domain.WorkflowNode{}
 	for _, n := range wf.Nodes {
-		if r.Nodes[n.ID].Status != "pending" {
+		nr := r.Nodes[n.ID]
+		if nr == nil || nr.Status != "pending" {
 			continue
 		}
-		ready := true
-		for _, d := range deps[n.ID] {
-			if r.Nodes[d].Status != "succeeded" {
-				ready = false
-			}
+		if incomingGate(wf, r, n, incoming[n.ID]) != gateOpen {
+			continue
 		}
-		if ready {
-			out = append(out, n)
+		if ok, err := evalRunIf(n, env); err != nil || !ok {
+			continue
 		}
+		out = append(out, n)
 	}
 	return out
 }
@@ -104,7 +110,7 @@ func replayUpstreamSucceeded(run domain.Run, nodeID string) bool {
 				continue
 			}
 			upstream := run.Nodes[edge.Source]
-			if upstream == nil || upstream.Status != "succeeded" {
+			if !upstream.SettledOK() {
 				return false
 			}
 			seen[edge.Source] = true
@@ -114,10 +120,11 @@ func replayUpstreamSucceeded(run domain.Run, nodeID string) bool {
 	return true
 }
 
+// allSucceeded reports whether every node settled without failing the run:
+// succeeded, skipped, or failed with the failure routed to an error edge.
 func allSucceeded(wf domain.WorkflowDefinition, r domain.Run) bool {
 	for _, definition := range wf.Nodes {
-		n := r.Nodes[definition.ID]
-		if n == nil || n.Status != "succeeded" {
+		if !r.Nodes[definition.ID].SettledOK() {
 			return false
 		}
 	}
@@ -147,9 +154,14 @@ func cancelledNode(wf domain.WorkflowDefinition, r domain.Run) (domain.WorkflowN
 	return firstNodeWithStatus(wf, r, "cancelled")
 }
 
+// hasFailed reports a failed node whose failure no error edge handles.
 func hasFailed(wf domain.WorkflowDefinition, r domain.Run) bool {
-	_, ok := firstNodeWithStatus(wf, r, "failed")
-	return ok
+	for _, definition := range wf.Nodes {
+		if n := r.Nodes[definition.ID]; n != nil && n.Status == "failed" && !n.ErrorRouted {
+			return true
+		}
+	}
+	return false
 }
 
 func validate(wf domain.WorkflowDefinition) error {
@@ -180,7 +192,10 @@ func validate(wf domain.WorkflowDefinition) error {
 			return fmt.Errorf("node %s reject target is required", n.ID)
 		}
 	}
-	return validateDAG(ids, wf.Edges)
+	if err := validateDAG(ids, wf.Edges); err != nil {
+		return err
+	}
+	return domain.ValidateWorkflowBranching(wf)
 }
 
 // validateNode checks one node's own fields: its type-specific settings, the

@@ -345,6 +345,7 @@ type runRow struct {
 	QueueEntered       *time.Time `gorm:"column:queue_entered_at;index:idx_runs_quota_bucket,priority:3"`
 	Revision           int        `gorm:"column:revision"`
 	Input              string     `gorm:"column:input;type:text"`
+	TriggerPayload     []byte     `gorm:"column:trigger_payload;type:json"`
 	HumanContext       string     `gorm:"column:human_context;type:text"`
 	CancelRequested    bool       `gorm:"column:cancel_requested"`
 	PauseRequested     bool       `gorm:"column:pause_requested"`
@@ -391,6 +392,8 @@ type runEventRow struct {
 	Message string     `gorm:"column:message;type:text"`
 	Payload []byte     `gorm:"column:payload;type:json"`
 	Ts      *time.Time `gorm:"column:ts"`
+	// ActorUserID indexes human control events by who performed them.
+	ActorUserID int64 `gorm:"column:actor_user_id;index:idx_run_events_actor"`
 }
 
 func (runEventRow) TableName() string { return "run_events" }

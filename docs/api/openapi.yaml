@@ -2098,6 +2098,86 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/workflow-conditions/check:
+    post:
+      tags: [Workflows]
+      operationId: checkWorkflowCondition
+      summary: Dry-run a node runIf condition
+      description: >-
+        Compiles a runIf expression and evaluates it against sample values shaped
+        like a run. Nothing stored is read and nothing runs. With workflow and
+        nodeId the expression must also read only nodes upstream of nodeId, as
+        saving the workflow requires. Compile and reference problems answer 200
+        with valid=false; an evaluation error answers 200 with valid=true, no
+        result and stage=evaluate, which would fail the node at run time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expression]
+              additionalProperties: false
+              properties:
+                expression:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: 'runIf expression, for example nodes.triage.data.verdict == "malicious"'
+                trigger:
+                  type: object
+                  additionalProperties: true
+                  description: Sample trigger payload, readable as trigger.
+                input:
+                  type: string
+                  description: Sample run input, readable as run.input.
+                nodes:
+                  type: object
+                  description: Sample upstream nodes by node ID.
+                  additionalProperties:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      status:
+                        type: string
+                        description: Node status; defaults to succeeded.
+                      data:
+                        type: object
+                        additionalProperties: true
+                        description: Structured output, readable as nodes[id].data.
+                workflow:
+                  type: object
+                  additionalProperties: true
+                  description: Workflow definition used for the upstream check.
+                nodeId:
+                  type: string
+                  description: Node whose runIf this is; enables the upstream check.
+      responses:
+        "200":
+          description: Check result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [valid, nodeRefs]
+                properties:
+                  valid:
+                    type: boolean
+                  nodeRefs:
+                    type: array
+                    items:
+                      type: string
+                  result:
+                    type: boolean
+                  error:
+                    type: string
+                  stage:
+                    type: string
+                    enum: [compile, reference, evaluate]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/workflows:
     get:
       tags: [Workflows]

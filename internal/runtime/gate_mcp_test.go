@@ -138,3 +138,25 @@ func TestMaterializeGateMCPSelectsLinuxForDocker(t *testing.T) {
 		t.Fatalf("docker gate helper = %q, want linux artifact", raw)
 	}
 }
+
+func TestGateMCPOutputEnvironment(t *testing.T) {
+	workspace := t.TempDir()
+	configRoot := filepath.Join(workspace, ".agentflow", "config", "judge")
+	if err := os.MkdirAll(configRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server, err := materializeGateMCP(workspace, configRoot, ".agentflow/config/judge/gate-mcp", "g.json", "local",
+		gateOutput{Path: ".agentflow/node-outputs/judge/attempt-1.json", Schema: []byte(`{ "type": "object" }`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Environment["AGENTFLOW_OUTPUT_PATH"] != ".agentflow/node-outputs/judge/attempt-1.json" || server.Environment["AGENTFLOW_OUTPUT_SCHEMA"] != `{"type":"object"}` {
+		t.Fatalf("environment = %v", server.Environment)
+	}
+	if _, err := materializeGateMCP(workspace, configRoot, ".agentflow/config/judge/gate-mcp", "g.json", "local", gateOutput{Path: "../escape.json", Schema: []byte(`{}`)}); err == nil {
+		t.Fatal("an output path outside the workspace must be refused")
+	}
+	if _, err := materializeGateMCP(workspace, configRoot, ".agentflow/config/judge/gate-mcp", "g.json", "local", gateOutput{Path: "o.json", Schema: []byte(`[1]`)}); err == nil {
+		t.Fatal("a non-object schema must be refused")
+	}
+}

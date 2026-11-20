@@ -861,8 +861,9 @@ func (d *Daemon) executeInvocation(ctx context.Context, task domain.RunnerTask) 
 		Prompt:       task.Prompt,
 		Options: runtime.InvocationOptions{
 			RunID: inv.RunID, NodeID: inv.NodeID, ResumeSessionID: inv.ResumeSessionID,
-			GateResultPath: inv.GateResultPath, Repositories: invocationRepositoryContexts(inv),
-			BrowserMCP: browserMCP, RunnerLogin: inv.CredentialSource == domain.RuntimeAuthLocal,
+			GateResultPath: inv.GateResultPath, OutputPath: inv.OutputPath, OutputSchema: inv.OutputSchema,
+			Repositories: invocationRepositoryContexts(inv),
+			BrowserMCP:   browserMCP, RunnerLogin: inv.CredentialSource == domain.RuntimeAuthLocal,
 		},
 		Driver: driver,
 	})

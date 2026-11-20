@@ -18,10 +18,27 @@ const gateMCPServerID = "agentflow-gate"
 
 var gateMCPBuildMu sync.Mutex
 
-func materializeGateMCP(workspace, configRoot, binaryRel, resultPath, driver string) (domain.MCPServerDefinition, error) {
+func materializeGateMCP(workspace, configRoot, binaryRel, resultPath, driver string, output ...gateOutput) (domain.MCPServerDefinition, error) {
 	resultPath = filepath.ToSlash(filepath.Clean(strings.TrimSpace(resultPath)))
-	if resultPath == "." || filepath.IsAbs(resultPath) || resultPath == ".." || strings.HasPrefix(resultPath, "../") {
+	if !validRelativeControlPath(resultPath) {
 		return domain.MCPServerDefinition{}, fmt.Errorf("invalid gate result path %q", resultPath)
+	}
+	environment := map[string]string{"AGENTFLOW_GATE_RESULT_PATH": resultPath}
+	if len(output) > 0 && strings.TrimSpace(output[0].Path) != "" {
+		outputPath := filepath.ToSlash(filepath.Clean(strings.TrimSpace(output[0].Path)))
+		if !validRelativeControlPath(outputPath) {
+			return domain.MCPServerDefinition{}, fmt.Errorf("invalid structured output path %q", outputPath)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(output[0].Schema, &schema); err != nil {
+			return domain.MCPServerDefinition{}, fmt.Errorf("structured output schema must be a JSON object: %w", err)
+		}
+		compact, err := json.Marshal(schema)
+		if err != nil {
+			return domain.MCPServerDefinition{}, err
+		}
+		environment["AGENTFLOW_OUTPUT_PATH"] = outputPath
+		environment["AGENTFLOW_OUTPUT_SCHEMA"] = string(compact)
 	}
 	targetOS := goruntime.GOOS
 	if strings.EqualFold(strings.TrimSpace(driver), "docker") {
@@ -40,14 +57,22 @@ func materializeGateMCP(workspace, configRoot, binaryRel, resultPath, driver str
 		return domain.MCPServerDefinition{}, err
 	}
 	return domain.MCPServerDefinition{
-		ID:        gateMCPServerID,
-		Name:      "LoopForge Gate",
-		Transport: "stdio",
-		Command:   filepath.ToSlash(binaryRel),
-		Environment: map[string]string{
-			"AGENTFLOW_GATE_RESULT_PATH": resultPath,
-		},
+		ID:          gateMCPServerID,
+		Name:        "LoopForge Gate",
+		Transport:   "stdio",
+		Command:     filepath.ToSlash(binaryRel),
+		Environment: environment,
 	}, nil
+}
+
+// gateOutput carries the optional submit_output configuration.
+type gateOutput struct {
+	Path   string
+	Schema json.RawMessage
+}
+
+func validRelativeControlPath(path string) bool {
+	return path != "." && path != "" && !filepath.IsAbs(path) && path != ".." && !strings.HasPrefix(path, "../")
 }
 
 // resolveGateMCPBinary follows the runner distribution convention: production
@@ -176,6 +201,20 @@ func writeMockGateResult(workspace, resultPath string, agent domain.AgentDefinit
 	result := mockGateResult(agent, resultPath)
 	raw, _ := json.Marshal(result)
 	return os.WriteFile(target, raw, 0o600)
+}
+
+// writeMockOutput lets the mock executor play submit_output: the agent
+// prompt's [[mock:output={...}]] directive is written to the output path.
+func writeMockOutput(workspace string, options InvocationOptions, agent domain.AgentDefinition) error {
+	value := mockDirective(agent.Prompt, "output")
+	if strings.TrimSpace(options.OutputPath) == "" || value == "" {
+		return nil
+	}
+	target := filepath.Join(workspace, filepath.FromSlash(options.OutputPath))
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(target, []byte(value), 0o600)
 }
 
 func mockGateResult(agent domain.AgentDefinition, resultPath string) domain.GateResult {

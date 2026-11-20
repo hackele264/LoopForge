@@ -475,6 +475,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.DELETE("/api/sandboxes", api.catalog.sandboxes)
 	g.GET("/api/workflows", api.catalog.workflows)
 	g.PUT("/api/workflows", api.catalog.workflows)
+	g.POST("/api/workflow-conditions/check", api.catalog.checkCondition)
 	g.GET("/api/workflows/:id", api.catalog.workflow)
 	g.DELETE("/api/workflows/:id", api.catalog.workflow)
 	g.GET("/api/workflows/:id/revisions", api.catalog.workflow)
