@@ -56,6 +56,7 @@ Actions come in three categories:
 | FIRST EPSS | CVE 利用概率评分 | none |
 | IPinfo | IP 查询 | Bearer token (optional) |
 | MISP | 版本, 搜索属性, 搜索事件, 事件详情, 新建事件, 添加属性, 添加目击 | `Authorization` header |
+| Lark / 飞书 | 机器人信息, 发送文本到群, 发送卡片到群, 发送卡片给个人 | Token exchange (App ID + App Secret → `tenant_access_token`) |
 
 Bold actions are response actions. The templates were written for LoopForge
 from each vendor's public API documentation; each action of the newer
@@ -170,6 +171,7 @@ Functions available in conditions and templates:
 | `coalesce(a, b, ...)` | The first value that is not null or empty |
 | `str(value)` | The value as text |
 | `base64url(text)` | URL-safe Base64 without padding |
+| `json(value)` | The value as JSON text, for APIs that take a JSON string inside a JSON body: `'{"text":{{ json(inputs.text) }}}'` |
 | `len`, `lower`, `upper`, `contains`, `startsWith`, `endsWith`, `exists` | As in conditions |
 
 Every action's output has `status` (the HTTP status) and its declared output
@@ -225,7 +227,7 @@ title: Example TI
 description: 查询 IP 信誉
 baseUrl: https://api.example.test
 auth:
-  type: header            # none | header | bearer | basic | query | oauth2_client_credentials
+  type: header            # none | header | bearer | basic | query | oauth2_client_credentials | token_exchange
   name: X-Api-Key
   secret: api_key
 params:                   # non-secret settings, readable as params.<name>
@@ -259,6 +261,24 @@ Templates may read `inputs` and `params`; output and `failIf` expressions
 read `response` (`status`, `headers`, `body`) and `inputs`. OAuth token
 URLs may be absolute or relative to the connection's address; tokens are
 cached per connection until a minute before they expire.
+
+`token_exchange` is for vendors that hand out a token for a JSON body of
+credentials instead of the OAuth form (Lark's `tenant_access_token`). It
+posts `tokenBody` (JSON field → secret name) to `tokenUrl`, reads the token
+at the dot path `tokenField` and its lifetime in seconds at `expiresField`
+(five minutes when absent), and sends it as a Bearer token:
+
+```yaml
+auth:
+  type: token_exchange
+  tokenUrl: /open-apis/auth/v3/tenant_access_token/internal
+  tokenBody: {app_id: app_id, app_secret: app_secret}
+  tokenField: tenant_access_token
+  expiresField: expire
+```
+
+A response without the token fails the action with the vendor's `msg`, when
+it sends one.
 
 Read-only actions can also feed alerts in on a schedule, for products that
 cannot push to a webhook: see [pull alert sources](alert-sources.md).

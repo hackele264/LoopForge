@@ -1,0 +1,137 @@
+# Written for LoopForge from Lark's public API documentation.
+id: lark
+title: Lark / 飞书
+vendor: Lark
+description: 以自建应用机器人的身份向群聊或个人发送文本和卡片消息。需要应用开启机器人能力并有发送消息权限；机器人要先被加进目标群。服务地址默认 Lark 国际版，飞书国内版填 https://open.feishu.cn。
+docs: https://open.larksuite.com/document/server-docs/im-v1/message/create
+baseUrl: https://open.larksuite.com
+auth:
+  type: token_exchange
+  tokenUrl: /open-apis/auth/v3/tenant_access_token/internal
+  tokenBody:
+    app_id: app_id
+    app_secret: app_secret
+  tokenField: tenant_access_token
+  expiresField: expire
+secrets:
+  - name: app_id
+    label: App ID
+    required: true
+  - name: app_secret
+    label: App Secret
+    required: true
+testAction: bot_info
+actions:
+  # Docs: https://open.larksuite.com/document/client-docs/bot-v3/obtain-bot-info
+  - id: bot_info
+    title: 机器人信息
+    description: 读取应用机器人的名称、open_id 和启用状态，用于测试连接。
+    category: enrichment
+    request:
+      method: GET
+      path: /open-apis/bot/v3/info
+    failIf: response.body.code != 0
+    output:
+      appName: response.body.bot.app_name
+      openId: response.body.bot.open_id
+      activateStatus: response.body.bot.activate_status
+  # Docs: https://open.larksuite.com/document/server-docs/im-v1/message/create
+  - id: send_text
+    title: 发送文本到群
+    category: utility
+    inputs:
+      - name: chat_id
+        label: 群 ID（oc_ 开头）
+        type: string
+        required: true
+      - name: text
+        label: 内容
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /open-apis/im/v1/messages
+      query:
+        receive_id_type: chat_id
+      body:
+        receive_id: "{{ inputs.chat_id }}"
+        msg_type: text
+        content: '{"text":{{ json(inputs.text) }}}'
+    failIf: response.body.code != 0
+    output:
+      messageId: response.body.data.message_id
+  # Docs: https://open.larksuite.com/document/server-docs/im-v1/message/create
+  - id: send_card
+    title: 发送卡片到群
+    description: 发送带标题和 Markdown 正文的消息卡片，标题颜色可按严重度选择。
+    category: utility
+    inputs:
+      - name: chat_id
+        label: 群 ID（oc_ 开头）
+        type: string
+        required: true
+      - name: title
+        label: 标题
+        type: string
+        required: true
+      - name: markdown
+        label: 正文（Markdown）
+        type: string
+        required: true
+      - name: color
+        label: 标题颜色
+        type: string
+        default: blue
+        enum: [blue, wathet, turquoise, green, yellow, orange, red, carmine, violet, purple, indigo, grey]
+    request:
+      method: POST
+      path: /open-apis/im/v1/messages
+      query:
+        receive_id_type: chat_id
+      body:
+        receive_id: "{{ inputs.chat_id }}"
+        msg_type: interactive
+        content: '{"config":{"wide_screen_mode":true},"header":{"template":{{ json(inputs.color) }},"title":{"tag":"plain_text","content":{{ json(inputs.title) }}}},"elements":[{"tag":"markdown","content":{{ json(inputs.markdown) }}}]}'
+    failIf: response.body.code != 0
+    output:
+      messageId: response.body.data.message_id
+  # Docs: https://open.larksuite.com/document/server-docs/im-v1/message/create
+  - id: send_card_to_user
+    title: 发送卡片给个人
+    description: 私聊发送消息卡片。用户需在应用的可用范围内；按邮箱发送需要应用能读取该用户。
+    category: utility
+    inputs:
+      - name: receive_id_type
+        label: 接收人类型
+        type: string
+        default: email
+        enum: [email, open_id, user_id, union_id]
+      - name: receive_id
+        label: 接收人
+        type: string
+        required: true
+      - name: title
+        label: 标题
+        type: string
+        required: true
+      - name: markdown
+        label: 正文（Markdown）
+        type: string
+        required: true
+      - name: color
+        label: 标题颜色
+        type: string
+        default: blue
+        enum: [blue, wathet, turquoise, green, yellow, orange, red, carmine, violet, purple, indigo, grey]
+    request:
+      method: POST
+      path: /open-apis/im/v1/messages
+      query:
+        receive_id_type: "{{ inputs.receive_id_type }}"
+      body:
+        receive_id: "{{ inputs.receive_id }}"
+        msg_type: interactive
+        content: '{"config":{"wide_screen_mode":true},"header":{"template":{{ json(inputs.color) }},"title":{"tag":"plain_text","content":{{ json(inputs.title) }}}},"elements":[{"tag":"markdown","content":{{ json(inputs.markdown) }}}]}'
+    failIf: response.body.code != 0
+    output:
+      messageId: response.body.data.message_id

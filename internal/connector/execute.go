@@ -504,6 +504,12 @@ func (x *Executor) applyAuth(ctx context.Context, c *Connector, conn *domain.Con
 			return err
 		}
 		headers.Set("Authorization", "Bearer "+token)
+	case AuthTokenExchange:
+		token, err := x.exchangeToken(ctx, c, conn, env)
+		if err != nil {
+			return err
+		}
+		headers.Set("Authorization", "Bearer "+token)
 	default:
 		return fmt.Errorf("unsupported auth type %q", c.Auth.Type)
 	}
@@ -587,4 +593,93 @@ func (x *Executor) oauthToken(ctx context.Context, c *Connector, conn *domain.Co
 		x.tokens.mu.Unlock()
 	}
 	return tok.AccessToken, nil
+}
+
+// exchangeToken posts the token_exchange body (secrets named by
+// Auth.TokenBody) as JSON to Auth.TokenURL and returns the token found at
+// Auth.TokenField, cached per connection until a minute before the lifetime
+// at Auth.ExpiresField (five minutes when absent) runs out.
+func (x *Executor) exchangeToken(ctx context.Context, c *Connector, conn *domain.Connection, env map[string]any) (string, error) {
+	tokenURL, err := renderText(c.Auth.TokenURL, TemplateRoots, env)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(tokenURL, "/") {
+		base := strings.TrimSpace(conn.BaseURL)
+		if base == "" {
+			base = c.BaseURL
+		}
+		tokenURL = strings.TrimRight(base, "/") + tokenURL
+	}
+	body := map[string]string{}
+	h := sha256.New()
+	h.Write([]byte(tokenURL))
+	for _, field := range sortedKeys(c.Auth.TokenBody) {
+		body[field] = conn.Secrets[c.Auth.TokenBody[field]]
+		h.Write([]byte("\x00" + field + "\x00" + body[field]))
+	}
+	key := conn.ID + ":x:" + base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+	x.tokens.mu.Lock()
+	if e, ok := x.tokens.entries[key]; ok && time.Now().Before(e.expires) {
+		x.tokens.mu.Unlock()
+		return e.token, nil
+	}
+	x.tokens.mu.Unlock()
+	payload, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("令牌地址无效：%w", err)
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Accept", "application/json")
+	client, err := x.clientFor(conn)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("获取 %s 访问令牌失败：%w", c.Title, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("获取 %s 访问令牌失败：HTTP %d", c.Title, resp.StatusCode)
+	}
+	var parsed any
+	if json.Unmarshal(raw, &parsed) != nil {
+		return "", fmt.Errorf("获取 %s 访问令牌失败：响应不是 JSON", c.Title)
+	}
+	token, _ := jsonPath(parsed, c.Auth.TokenField).(string)
+	if token == "" {
+		reason := "响应里没有 " + c.Auth.TokenField
+		if msg, ok := jsonPath(parsed, "msg").(string); ok && msg != "" {
+			reason += "：" + msg
+		}
+		return "", fmt.Errorf("获取 %s 访问令牌失败：%s", c.Title, reason)
+	}
+	life := 5 * time.Minute
+	if c.Auth.ExpiresField != "" {
+		if secs, ok := jsonPath(parsed, c.Auth.ExpiresField).(float64); ok && secs > 0 {
+			life = time.Duration(secs) * time.Second
+		}
+	}
+	life -= time.Minute
+	if life > 0 {
+		x.tokens.mu.Lock()
+		x.tokens.entries[key] = tokenEntry{token: token, expires: time.Now().Add(life)}
+		x.tokens.mu.Unlock()
+	}
+	return token, nil
+}
+
+// jsonPath reads a dot path ("data.token") from decoded JSON.
+func jsonPath(v any, path string) any {
+	for _, part := range strings.Split(path, ".") {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = m[part]
+	}
+	return v
 }

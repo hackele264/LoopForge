@@ -37,6 +37,10 @@ const (
 	AuthBasic                   = "basic"
 	AuthQuery                   = "query"
 	AuthOAuth2ClientCredentials = "oauth2_client_credentials"
+	// AuthTokenExchange posts a JSON body built from secrets to TokenURL and
+	// sends the token read from the response as a Bearer token (for example
+	// Lark's tenant_access_token).
+	AuthTokenExchange = "token_exchange"
 )
 
 // Input types.
@@ -94,6 +98,12 @@ type Auth struct {
 	Scope        string `yaml:"scope" json:"scope,omitempty"`
 	ClientID     string `yaml:"clientId" json:"clientId,omitempty"`
 	ClientSecret string `yaml:"clientSecret" json:"clientSecret,omitempty"`
+	// Token exchange (also uses TokenURL). TokenBody maps JSON body fields
+	// to secret names; TokenField and ExpiresField are dot paths in the JSON
+	// response for the token and its lifetime in seconds.
+	TokenBody    map[string]string `yaml:"tokenBody" json:"tokenBody,omitempty"`
+	TokenField   string            `yaml:"tokenField" json:"tokenField,omitempty"`
+	ExpiresField string            `yaml:"expiresField" json:"expiresField,omitempty"`
 }
 
 // Field is a connection parameter or secret.
@@ -278,6 +288,24 @@ func (c *Connector) validateAuth(secrets map[string]bool) error {
 			return fmt.Errorf("scope: %w", err)
 		}
 		return need(defaultName(c.Auth.ClientID, "client_id"), defaultName(c.Auth.ClientSecret, "client_secret"))
+	case AuthTokenExchange:
+		if strings.TrimSpace(c.Auth.TokenURL) == "" {
+			return fmt.Errorf("token_exchange auth needs tokenUrl")
+		}
+		if err := checkTemplate(c.Auth.TokenURL, TemplateRoots); err != nil {
+			return fmt.Errorf("tokenUrl: %w", err)
+		}
+		if len(c.Auth.TokenBody) == 0 {
+			return fmt.Errorf("token_exchange auth needs tokenBody")
+		}
+		if strings.TrimSpace(c.Auth.TokenField) == "" {
+			return fmt.Errorf("token_exchange auth needs tokenField")
+		}
+		names := make([]string, 0, len(c.Auth.TokenBody))
+		for _, name := range c.Auth.TokenBody {
+			names = append(names, name)
+		}
+		return need(names...)
 	}
 	return fmt.Errorf("unsupported auth type %q", c.Auth.Type)
 }
