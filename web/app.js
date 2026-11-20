@@ -1010,6 +1010,17 @@ function bind(){
     }
   },true);
   matchMedia('(max-width:1000px)').addEventListener('change',()=>setSettingsSidebarExpanded(settingsSidebarExpanded()));
+  // At ≤1000px the settings navigation is an overlay drawer over the page:
+  // pressing outside it or Escape closes it, so it never blocks the page.
+  // pointerdown, not click: a click that opens the drawer must not close it.
+  document.addEventListener('pointerdown',event=>{
+    if(!narrowSettingsDrawerOpen()||!(event.target instanceof Element))return;
+    if(event.target.closest('#settingsSidebar,#railSettingsEntry,.collab-rail-toggle,#settingsSidebarToggle'))return;
+    setSettingsSidebarExpanded(false);
+  });
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape'&&narrowSettingsDrawerOpen())setSettingsSidebarExpanded(false);
+  });
   bindFlowDesigner();
   $('#workflowSelect').onchange=e=>switchFlowWorkflow(e.target.value);
   $('#workflowName').oninput=e=>{if(!state.workflow)return;state.workflow.name=e.target.value;dirty()};
@@ -1713,6 +1724,13 @@ settingsRouteMotion.addEventListener('change',()=>{
   if(pending)switchView(pending);
   setSettingsSidebarExpanded(settingsSidebarExpanded());
 });
+function narrowSettingsDrawerOpen(){
+  return settingsSidebarExpanded()&&matchMedia('(max-width:1000px)').matches;
+}
+// Closes the narrow-screen drawer when a page opens a record, such as a run.
+function closeNarrowSettingsDrawer(){
+  if(narrowSettingsDrawerOpen())setSettingsSidebarExpanded(false);
+}
 function setSettingsSidebarExpanded(expanded){
   const managing=document.body.classList.contains('management-mode');
   const open=managing&&expanded;
@@ -1954,9 +1972,11 @@ function switchView(name){
   document.body.classList.toggle('management-mode', isPureManagement);
   // At ≤1000px the settings navigation is an overlay drawer: it opens when the
   // user comes into settings from another page, and closes once a settings
-  // page is picked (or deep-linked) so the page itself is visible.
+  // page is picked (or deep-linked) so the page itself is visible. A link to
+  // one record (#/runs/<id>) goes straight to the record, drawer closed.
   const narrowSettings=isPureManagement&&matchMedia('(max-width:1000px)').matches;
-  setSettingsSidebarExpanded(!narrowSettings?isPureManagement:staying?settingsSidebarExpanded():!!prevView&&!isSettingsManagementView(previous));
+  const toRecord=routePart(0)===name&&!!routePart(1);
+  setSettingsSidebarExpanded(!narrowSettings?isPureManagement:staying?settingsSidebarExpanded():!!prevView&&!isSettingsManagementView(previous)&&!toRecord);
   $('#managementEntry')?.classList.toggle('active', isPureManagement);
   $('#railSettingsEntry')?.classList.toggle('active', isPureManagement);
   const noSidebarViews = ['issues', 'approvals', 'cases', 'observability'];

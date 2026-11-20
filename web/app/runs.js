@@ -263,6 +263,7 @@ function showRunDetail(id){
   if(state.selectedRun!==id){stopLiveRun();stopPreviewPoll();state.runWorkspace=null}
   state.selectedRun=id;
   syncRunHash(id);
+  if(typeof closeNarrowSettingsDrawer==='function')closeNarrowSettingsDrawer();
   $('#runsView')?.classList.add('detail-open');
   document.querySelector('#runsView .run-panel')?.setAttribute('hidden','');
   $('#runsListSection').hidden=true;
