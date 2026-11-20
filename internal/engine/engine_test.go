@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"agentflow/internal/domain"
 	"agentflow/internal/gitwork"
@@ -2002,6 +2003,50 @@ func TestRenderPromptIncludesInputUpstreamAndFeedback(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt %q does not contain %q", got, want)
 		}
+	}
+}
+
+// An action node's Output is only its timeline line; the agent downstream
+// must also see what the action found, without the raw vendor response.
+func TestRenderPromptShowsUpstreamActionData(t *testing.T) {
+	t.Parallel()
+	wf := domain.WorkflowDefinition{Edges: []domain.WorkflowEdge{{Source: "vt_url", Target: "triage"}}}
+	run := domain.Run{
+		TriggerPayload: domain.RawJSON(`{"alert":{"subject":"密码将于今日过期","sender":"it@micros0ft.example"}}`),
+		Nodes: map[string]*domain.NodeRun{
+			"vt_url": {NodeID: "vt_url", Output: "VirusTotal · URL 检测结果：HTTP 200", Data: domain.RawJSON(`{"body":{"raw":"vendor"},"found":true,"malicious":14,"suspicious":2}`)},
+			"triage": {NodeID: "triage"},
+		},
+	}
+	got := renderPromptSpec(wf, domain.WorkflowNode{ID: "triage"}, "告警：\n{{trigger}}\nVT：\n{{node.vt_url.data}}\n{{upstream}}", run)
+	for _, want := range []string{
+		"[vt_url]\nVirusTotal · URL 检测结果：HTTP 200\n结构化结果：",
+		`"malicious": 14`,
+		`"suspicious": 2`,
+		`"subject": "密码将于今日过期"`,
+		"VT：\n```json\n{",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt does not contain %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "vendor") {
+		t.Fatalf("raw response body leaked into the prompt:\n%s", got)
+	}
+}
+
+func TestPromptJSONTruncatesOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+	if got := promptJSON("", false); got != "" {
+		t.Fatalf("empty data rendered %q", got)
+	}
+	if got := promptJSON(`{"body":{"x":1}}`, true); got != "" {
+		t.Fatalf("body-only data rendered %q", got)
+	}
+	long := domain.RawJSON(`"` + strings.Repeat("钓", promptDataLimit) + `"`)
+	got := promptJSON(long, false)
+	if !strings.Contains(got, "已截断") || !utf8.ValidString(got) {
+		t.Fatalf("truncated block is invalid or unmarked: %d bytes", len(got))
 	}
 }
 

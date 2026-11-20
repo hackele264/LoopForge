@@ -843,7 +843,8 @@ function insertAgentPlaceholder(host, token){
 const AGENT_PROMPT_PLACEHOLDERS=[
   {t:'{{input}}',l:'任务输入',d:'本次运行的输入；不写时自动附在末尾'},
   {t:'{{artifacts}}',l:'上游产物',d:'上游节点交付的产物清单；不写时自动附在末尾'},
-  {t:'{{upstream}}',l:'上游结论',d:'直接上游节点的输出；不写时自动附在末尾'},
+  {t:'{{upstream}}',l:'上游结论',d:'直接上游节点的输出和结构化结果；不写时自动附在末尾'},
+  {t:'{{trigger}}',l:'触发数据',d:'启动本次运行的结构化数据，如 webhook 推入的告警原文（JSON）'},
   {t:'{{feedback}}',l:'打回反馈',d:'本节点上一轮被打回或门禁失败的原因，首轮为空'},
   {t:'{{rejectTo}}',l:'打回节点',d:'失败时打回的节点，未配置时为「上游实现节点」'},
   {t:'{{repository}}',l:'仓库',d:'仓库名、工蜂项目、基线与本次工作分支'},

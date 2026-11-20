@@ -3,8 +3,10 @@ package engine
 import (
 	"agentflow/internal/domain"
 	"agentflow/internal/repo"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 func renderPromptSpec(wf domain.WorkflowDefinition, node domain.WorkflowNode, rolePrompt string, run domain.Run) string {
@@ -83,7 +85,9 @@ func applyPromptPlaceholders(st *repo.Store, wf domain.WorkflowDefinition, node 
 	prompt = strings.ReplaceAll(prompt, "{{upstream}}", strings.Join(upstream, "\n\n"))
 	for id, nodeRun := range run.Nodes {
 		prompt = strings.ReplaceAll(prompt, "{{node."+id+".output}}", nodeRun.Output)
+		prompt = strings.ReplaceAll(prompt, "{{node."+id+".data}}", promptJSON(nodeRun.Data, true))
 	}
+	prompt = strings.ReplaceAll(prompt, "{{trigger}}", promptJSON(run.TriggerPayload, false))
 	for _, artifact := range run.Artifacts {
 		prompt = strings.ReplaceAll(prompt, "{{artifact."+artifact.NodeID+"."+artifact.Name+"}}", artifactPromptBody(artifact))
 	}
@@ -117,8 +121,18 @@ func upstreamNodeOutputs(wf domain.WorkflowDefinition, node domain.WorkflowNode,
 		if edge.Target != node.ID {
 			continue
 		}
-		if source := run.Nodes[edge.Source]; source != nil && source.Output != "" {
-			upstream = append(upstream, fmt.Sprintf("[%s]\n%s", edge.Source, source.Output))
+		source := run.Nodes[edge.Source]
+		if source == nil {
+			continue
+		}
+		// An action node's Output is one timeline line ("VirusTotal · URL
+		// 检测结果：HTTP 200"); what it found is only in Data.
+		text := source.Output
+		if data := promptJSON(source.Data, true); data != "" {
+			text = strings.TrimSpace(text + "\n结构化结果：\n" + data)
+		}
+		if text != "" {
+			upstream = append(upstream, fmt.Sprintf("[%s]\n%s", edge.Source, text))
 		}
 	}
 	return upstream
@@ -273,4 +287,38 @@ func appendArtifactContract(prompt string, node domain.WorkflowNode, repositorie
 		fmt.Fprintf(&b, "- `%s`: %s (%s, %s)\n", contract.Path, contract.Name, contract.MediaType, required)
 	}
 	return b.String()
+}
+
+// promptDataLimit caps one JSON block in a prompt; a vendor response can be
+// far larger than anything an Agent needs to read inline.
+const promptDataLimit = 6000
+
+// promptJSON renders stored JSON for a prompt as an indented ```json block,
+// or "" when there is none. dropBody removes an action's raw HTTP response
+// ("body"), keeping the fields its template mapped out of it.
+func promptJSON(raw domain.RawJSON, dropBody bool) string {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" || text == "{}" {
+		return ""
+	}
+	var value any
+	if err := json.Unmarshal([]byte(text), &value); err == nil {
+		if object, ok := value.(map[string]any); ok && dropBody {
+			delete(object, "body")
+			if len(object) == 0 {
+				return ""
+			}
+		}
+		if pretty, err := json.MarshalIndent(value, "", "  "); err == nil {
+			text = string(pretty)
+		}
+	}
+	if len(text) > promptDataLimit {
+		cut := promptDataLimit
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut] + "\n…（已截断，完整内容见运行详情）"
+	}
+	return "```json\n" + text + "\n```"
 }

@@ -5958,7 +5958,7 @@ components:
           type: string
         prompt:
           type: string
-          description: The role's single free-form brief (who it is, what to do, order, limits). Runtime placeholders such as {{input}}, {{repository}}, {{artifacts}}, {{feedback}} and {{upstream}} are substituted per run; deliverable, gate and retry sections are added from artifactOutputs, verification and node policy.
+          description: The role's single free-form brief (who it is, what to do, order, limits). Runtime placeholders such as {{input}}, {{repository}}, {{artifacts}}, {{feedback}}, {{upstream}} (upstream outputs plus each upstream node's structured result), {{trigger}} (the run's trigger payload as JSON) and {{node.<id>.data}} (a node's structured result as JSON) are substituted per run; deliverable, gate and retry sections are added from artifactOutputs, verification and node policy.
         rules:
           type: array
           items:
