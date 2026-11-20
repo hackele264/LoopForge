@@ -177,6 +177,15 @@ func (e *Engine) ApproveAs(runID, nodeID, humanContext string, actor domain.Acto
 	if err := e.authorizeResponseRelease(r, nodeID, actor); err != nil {
 		return err
 	}
+	// A gate needing several approvals keeps waiting until enough distinct
+	// people approved; see approval_rules.go.
+	complete, err := e.castApprovalVote(&r, nodeID, actor)
+	if err != nil {
+		return err
+	}
+	if !complete {
+		return e.persistApprovalVote(runID, r, nodeID, actor)
+	}
 	n.Status = "succeeded"
 	n.FinishedAt = time.Now().UTC()
 	recordDecision(n, actor)
@@ -184,6 +193,9 @@ func (e *Engine) ApproveAs(runID, nodeID, humanContext string, actor domain.Acto
 	decision := "# Approval\n\nApproved by a human gate.\n"
 	if byline := decisionByline(actor); byline != "" {
 		decision += "\n" + byline + "\n"
+	}
+	if votes := approvalVotesByline(n); votes != "" {
+		decision += "\n" + votes
 	}
 	if note != "" {
 		decision += "\n" + note + "\n"
@@ -195,6 +207,7 @@ func (e *Engine) ApproveAs(runID, nodeID, humanContext string, actor domain.Acto
 	if err := e.persistControlDecision(runID, r, expected...); err != nil {
 		return err
 	}
+	e.auditApproval(r, nodeID, "approval.vote", actor, map[string]any{"complete": true})
 	e.recordCaseDecision(r, nodeID, "批准", humanContext, actor)
 	return nil
 }
@@ -304,6 +317,12 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
 // node is a waiting human gate.
 func (e *Engine) RejectAs(runID string, req domain.RejectRequest, actor domain.Actor, expected ...NodeExpectation) error {
 	defer e.stateLocks.lock(runID)()
+	return e.rejectLocked(runID, req, actor, false, expected...)
+}
+
+// rejectLocked is RejectAs with the run's state lock held. A system decision
+// (an approval deadline) skips the approver policy.
+func (e *Engine) rejectLocked(runID string, req domain.RejectRequest, actor domain.Actor, system bool, expected ...NodeExpectation) error {
 	r, ok := e.repo.RunState(runID)
 	if !ok {
 		return fmt.Errorf("run not found")
@@ -324,11 +343,18 @@ func (e *Engine) RejectAs(runID string, req domain.RejectRequest, actor domain.A
 	if err := forbidClosedGongfengIssue(e.repo, r); err != nil {
 		return err
 	}
+	var rejectedVotes *domain.NodeRun
 	if nr := r.Nodes[req.NodeID]; nr != nil && nr.Status == "waiting_approval" {
-		if err := e.authorizeDecision(r, req.NodeID, actor); err != nil {
-			return err
+		if !system {
+			if err := e.authorizeDecision(r, req.NodeID, actor); err != nil {
+				return err
+			}
 		}
 		recordDecision(nr, actor)
+		if nr.Approval != nil {
+			snapshot := *nr
+			rejectedVotes = &snapshot
+		}
 	}
 	wf := workflowForRun(e.repo, r)
 	target := req.TargetID
@@ -385,6 +411,13 @@ func (e *Engine) RejectAs(runID string, req domain.RejectRequest, actor domain.A
 	e.cancelLiveChildRuns(stale)
 	if err := e.persistControlDecision(runID, r, expected...); err != nil {
 		return err
+	}
+	if rejectedVotes != nil && !system {
+		// The reset cleared the votes; audit them as they stood. A deadline
+		// writes its own approval.timeout_rejected entry.
+		audited := r
+		audited.Nodes = map[string]*domain.NodeRun{req.NodeID: rejectedVotes}
+		e.auditApproval(audited, req.NodeID, "approval.reject", actor, map[string]any{"target": target})
 	}
 	e.recordCaseDecision(r, req.NodeID, "打回", req.Reason, actor)
 	e.cancelNodeExecutions(runID, interrupted)

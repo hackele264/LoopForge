@@ -66,6 +66,11 @@ platform:
 - API tokens are refused, even with `approvals:decide`, unless
   `AGENTFLOW_RESPONSE_APPROVAL_ALLOW_TOKEN=true`.
 
+With a two-person rule (`approval.requiredApprovals` above 1) each approval
+must come from a different named person, and each one must meet the rule
+above. See [two-person approval and escalation](conditional-workflows.md#two-person-approval-and-escalation)
+for deadlines and escalation.
+
 Other approvals follow the existing rules: an approver policy on the node,
 and `AGENTFLOW_APPROVAL_REQUIRE_NAMED=true` to require a named user
 everywhere. Saving a workflow with a response action that is not behind an
@@ -84,6 +89,8 @@ It records:
 | `auth.token.create`, `auth.token.revoke` | Token changes, with scopes and projects |
 | `api METHOD /route` | Every API write (approvals, configuration, cases, connections...) and every request answered 401 or 403 |
 | `connector.action` | Every connector call that used a connection's credentials, with run, node and outcome |
+| `approval.vote`, `approval.reject` | Every approval or rejection of an approval node with a two-person or deadline rule, with run, node and votes so far |
+| `approval.escalated`, `approval.timeout_rejected` | An approval deadline that escalated or rejected the node (actor kind `system`) |
 
 Each entry has the time, the user, whether an API token was used (its ID),
 the source address, the project when the request names one, the HTTP status
@@ -175,7 +182,8 @@ are created by gorm's incremental AutoMigrate;
 
 ## Not covered yet
 
-- Two-person approval and timed escalation of approvals.
+- Escalation beyond one step, and direct messages to escalation approvers
+  (an escalation re-sends the SOP's waiting reminders to its bots).
 - A service-account type distinct from user accounts.
 - Encryption at rest for the other stored credentials. These columns are
   still plaintext (each has its own read and write paths, so they were left

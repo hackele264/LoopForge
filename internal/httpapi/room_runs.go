@@ -392,6 +392,11 @@ func (h *roomsHandlers) decide(c *gin.Context) {
 	if req.Action == "approve" {
 		err = h.engine.ApproveAs(req.RunID, req.NodeID, req.Reason, h.requestActor(c.Request))
 		body = "批准了「" + nodeName + "」"
+		if err == nil {
+			if after, ok := h.repo.RunState(req.RunID); ok {
+				body += approvalPendingNote(after, req.NodeID)
+			}
+		}
 	} else {
 		target := roomRejectTarget(run.WorkflowSnapshot, req.NodeID)
 		if target == "" {

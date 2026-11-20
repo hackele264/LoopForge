@@ -202,5 +202,12 @@ func (h *assistantHandlers) handleBotCardAction(ctx context.Context, bot domain.
 	if err != nil {
 		return "操作未完成，请在平台查看当前运行状态。", nil
 	}
+	if item.Action == "approve" {
+		if after, ok := h.repo.RunState(delivery.RunID); ok {
+			if note := approvalPendingNote(after, delivery.NodeID); note != "" {
+				return fmt.Sprintf("「%s」已记录你的批准%s。", delivery.SourceName, note), nil
+			}
+		}
+	}
 	return fmt.Sprintf("「%s」操作已完成：%s。", delivery.SourceName, map[string]string{"approve": "确认通过，继续流程", "retry": "重试当前节点", "pass": "手动通过节点", "decline": "不再重试", "resume": "继续运行", "reject": "退回上游"}[item.Action]), nil
 }

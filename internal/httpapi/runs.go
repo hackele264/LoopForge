@@ -277,7 +277,12 @@ func (h *runsHandlers) run(c *gin.Context) {
 			if rejectBlockedIssueRun(h.deps, c, id) {
 				return
 			}
-			respond(c, h.engine.ApproveAs(id, req.NodeID, req.Context, h.requestActor(c.Request), decisionExpectation(req.NodeID, req.Expected)...))
+			if err := h.engine.ApproveAs(id, req.NodeID, req.Context, h.requestActor(c.Request), decisionExpectation(req.NodeID, req.Expected)...); err != nil {
+				respond(c, err)
+				return
+			}
+			run, _ := h.repo.RunState(id)
+			c.JSON(http.StatusOK, approveResponse(run, req.NodeID))
 		}
 	case "/api/runs/:id/reject":
 		var req domain.RejectRequest
