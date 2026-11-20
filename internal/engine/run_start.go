@@ -5,6 +5,8 @@ import (
 	"agentflow/internal/domain"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -145,7 +147,10 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 		return domain.Run{}, err
 	}
 	now := time.Now().UTC()
-	id := fmt.Sprintf("run-%d", now.UnixNano())
+	// The random part keeps IDs unique when several runs start in the same
+	// clock tick (macOS clocks tick in microseconds): PutRun upserts, so a
+	// repeated ID would silently merge two runs.
+	id := fmt.Sprintf("run-%d-%s", now.UnixNano(), randomIDSuffix())
 	assignWorkBranches(repositories, func() string {
 		issueID := strings.TrimSpace(executionContext.IssueID)
 		if issueID != "" {
@@ -251,4 +256,13 @@ func firstTrigger(trigger []json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return trigger[0]
+}
+
+// randomIDSuffix returns 8 random hex characters.
+func randomIDSuffix() string {
+	raw := make([]byte, 4)
+	if _, err := rand.Read(raw); err != nil {
+		return fmt.Sprintf("%08x", time.Now().UnixNano()&0xffffffff)
+	}
+	return hex.EncodeToString(raw)
 }

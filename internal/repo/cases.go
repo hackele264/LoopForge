@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,8 +81,12 @@ func (caseTriggerRow) TableName() string { return "case_triggers" }
 // ErrCaseNotFound reports a missing case.
 var ErrCaseNotFound = errors.New("case not found")
 
+// newRowID returns prefix-<nanoseconds>-<random>; the random part keeps IDs
+// unique when rows are created in the same clock tick.
 func newRowID(prefix string) string {
-	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	raw := make([]byte, 4)
+	_, _ = rand.Read(raw)
+	return fmt.Sprintf("%s-%d-%s", prefix, time.Now().UnixNano(), hex.EncodeToString(raw))
 }
 
 // ---------- alerts ----------
@@ -359,7 +365,7 @@ func (r *CasesRepo) applyChange(tx *gorm.DB, caseID string, change CaseChange) e
 	for i, e := range change.Events {
 		e.CaseID = caseID
 		if e.ID == "" {
-			e.ID = fmt.Sprintf("cev-%d-%d", e.CreatedAt.UnixNano(), i)
+			e.ID = fmt.Sprintf("%s-%d", newRowID("cev"), i)
 		}
 		payload, err := json.Marshal(e)
 		if err != nil {
