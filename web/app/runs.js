@@ -458,7 +458,7 @@ function runBranchFactsHTML(nr){
   if(nr.decidedBy)rows.push(['决定人',`用户 #${nr.decidedBy}${nr.decidedAt?` · ${new Date(nr.decidedAt).toLocaleString()}`:''}`]);
   const data=nr.data&&typeof nr.data==='object'?JSON.stringify(nr.data,null,2):'';
   if(!rows.length&&!data)return '';
-  return `<div class="node-branch-facts">${rows.map(([k,v])=>`<div><span>${escapeHTML(k)}</span><b>${escapeHTML(v)}</b></div>`).join('')}${data?`<div class="node-output"><div><b>结构化输出</b></div><pre>${escapeHTML(data)}</pre></div>`:''}</div>`;
+  return `<div class="node-branch-facts">${rows.map(([k,v])=>`<div><span>${escapeHTML(k)}</span><b>${escapeHTML(v)}</b></div>`).join('')}${typeof forEachResultsHTML==='function'?forEachResultsHTML(nr.data):''}${data?`<div class="node-output"><div><b>结构化输出</b></div><pre>${escapeHTML(data)}</pre></div>`:''}</div>`;
 }
 function gateResultCardHTML(nr){
   const gate=nr?.gateResult;

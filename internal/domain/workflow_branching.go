@@ -12,6 +12,9 @@ import (
 // conditions, join strategies, output schemas, approver policies and RunIf
 // expressions. A RunIf must compile and may only read nodes upstream of it.
 func ValidateWorkflowBranching(wf WorkflowDefinition) error {
+	if err := ValidateWorkflowForEach(wf); err != nil {
+		return err
+	}
 	for _, e := range wf.Edges {
 		when := strings.TrimSpace(e.When)
 		if when != "" && !strings.EqualFold(when, EdgeWhenSuccess) && !strings.EqualFold(when, EdgeWhenError) {

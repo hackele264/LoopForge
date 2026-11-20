@@ -13,6 +13,10 @@ them runs exactly as before.
 | `when: "error"` | edge | Taken when the source node fails for good (no retries or rework left). |
 | `outputSchema` | node | JSON Schema for the node's structured output (`NodeRun.data`). |
 | `approvers` | approval node | `{"userIds": [..], "roles": ["owner" \| "maintainer" \| "member" \| "admin"]}` |
+| `forEach` | action node | List expression. The action runs once per element; see [list loops](#list-loops). |
+| `forEachConcurrency` | action node | Items in flight at once: default 4, at most 16. |
+| `forEachLimit` | action node | Most items allowed: default 100, at most 1000. A longer list fails the node before any item runs. |
+| `forEachFailOn` | action node | `any` (default): the node fails if any item fails. `all`: only if every item fails. |
 
 Validation runs when a workflow is saved and when a run starts: expressions
 must compile and may only read nodes upstream of the node they guard.
@@ -61,6 +65,45 @@ node, which an error edge can handle.
 nodes.triage.data.verdict == "malicious" && nodes.triage.data.confidence >= 0.8
 trigger.severity in ["high", "critical"]
 ```
+
+## List loops
+
+An action node with `forEach` runs its connector action once per element of
+the list the expression yields, for example one reputation lookup per IP in
+the alert:
+
+```json
+{"id": "vt", "type": "action", "forEach": "iocs(trigger, \"ipv4\")", "forEachConcurrency": 4,
+ "action": {"connector": "virustotal", "action": "ip_report", "connectionId": "cn-vt",
+            "inputs": {"ip": "{{ item }}"}}}
+```
+
+- `forEach` is evaluated like `runIf` (trigger, upstream nodes, run) and must
+  yield a list; `null` counts as an empty list, anything else fails the node.
+  Inside the action's input templates `item` is the current element and
+  `index` its zero-based position. Without `forEach` nothing changes.
+- Items run at most `forEachConcurrency` at a time; each call still goes
+  through the connection's rate limit and retry settings. A list longer than
+  `forEachLimit` fails the node before any call, so no indicator is silently
+  left out.
+- Every item runs even when others fail. The node's `data` is
+  `{total, succeeded, failed, results}`, where `results` follows the list
+  order and each entry is `{index, item, ok, output}` or
+  `{index, item, ok: false, error}`. An empty list succeeds with `total: 0`.
+- With `forEachFailOn: any` (the default) one failed item fails the node;
+  with `all` the node fails only when every item failed, and downstream
+  `runIf` can read `nodes.<id>.data.failed`. A failed loop still publishes
+  its `data`, so an error branch can see which items failed.
+- The stored output is bounded at 256 KiB. When the results are larger,
+  first every item's raw response `body` is dropped, then every item's
+  `output`, then the `item` values (errors shortened to 120 characters);
+  `data.truncated` names the last step taken (`bodies`, `outputs` or
+  `items`). The counts are always kept.
+- `maxAttempts` retries the whole loop: every item runs again. Cancelling
+  the run aborts the calls in flight and starts no more; a cancelled loop
+  publishes nothing.
+- Each external call is audited on its own; a case timeline gets one
+  summary entry per loop instead of one per item.
 
 ## Trigger payloads and script output
 
@@ -111,6 +154,10 @@ every gate refuse service callers.
   through `POST /api/workflow-conditions/check` against a sample trigger and
   sample upstream results, prefilled from the upstream nodes' output schemas. Script nodes add an output schema
   editor, and approval nodes a 谁可以确认 picker (roles plus user IDs).
+- Action nodes have a 逐项执行 field for `forEach`; once it is filled, 同时执行,
+  最多几项 and 节点何时算失败 set the concurrency, limit and failure policy.
+  Looping nodes carry a 逐项执行 tag, and the run page lists each item's
+  result in a table above the structured output.
 - Nodes show their condition, join and approvers as tags. 配置检查 warns
   about invalid conditions, conditions that read nodes without an output
   schema, `join: any` with a single input, join-all nodes that merge
