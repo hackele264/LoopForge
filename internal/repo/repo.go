@@ -184,6 +184,7 @@ type Store struct {
 	*WebhooksRepo
 	*CasesRepo
 	*ConnectionsRepo
+	*AlertSourcesRepo
 	*AuditRepo
 	*PreviewsRepo
 	*EngineInstancesRepo
@@ -219,6 +220,7 @@ func newStore(db *gorm.DB) *Store {
 	s.WebhooksRepo = &WebhooksRepo{deps: d}
 	s.CasesRepo = &CasesRepo{deps: d}
 	s.ConnectionsRepo = &ConnectionsRepo{deps: d}
+	s.AlertSourcesRepo = &AlertSourcesRepo{deps: d}
 	s.AuditRepo = &AuditRepo{deps: d}
 	s.AnalyticsRepo = &AnalyticsRepo{deps: d, runs: s.RunsRepo, catalog: s.CatalogRepo, delivery: s.DeliveryRepo, issues: s.IssuesRepo, tasks: s.TasksRepo, projects: s.ProjectsRepo, insights: s.InsightsRepo}
 	s.PreviewsRepo = &PreviewsRepo{deps: d}

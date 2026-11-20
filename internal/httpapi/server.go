@@ -74,6 +74,7 @@ type Server struct {
 	projects        *projectsHandlers
 	insights        *insightsHandlers
 	webhooks        *webhooksHandlers
+	alertSources    *alertSourcesHandlers
 	cases           *casesHandlers
 	connections     *connectionsHandlers
 	audit           *auditHandlers
@@ -123,6 +124,9 @@ func NewWithNotificationsAndBackground(ctx context.Context, s *repo.Store, e *en
 		h.startSessionJanitor(ctx)
 		h.startAttachmentSweeper(ctx)
 	})
+	if bg.alertSources != nil {
+		bg.alertSources.start(ctx)
+	}
 	return router, bg
 }
 
@@ -184,6 +188,10 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	api.schedule.notifications = api.notifications
 	api.webhooks = &webhooksHandlers{deps: d, cases: api.cases}
 	api.connections = newConnectionsHandlers(d, api.cases)
+	api.alertSources = newAlertSourcesHandlers(d, api.webhooks)
+	if bg != nil {
+		bg.alertSources = api.alertSources
+	}
 	api.audit = &auditHandlers{deps: d}
 	e.SetCaseService(api.cases)
 	if syncSvc != nil {
@@ -529,6 +537,13 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.DELETE("/api/webhooks/:id", api.webhooks.webhook)
 	g.POST("/api/webhooks/:id/rotate", api.webhooks.rotateSecret)
 	g.GET("/api/webhooks/:id/deliveries", api.webhooks.deliveries)
+	g.GET("/api/alert-sources", api.alertSources.alertSources)
+	g.POST("/api/alert-sources", api.alertSources.alertSources)
+	g.POST("/api/alert-sources/preview", api.alertSources.preview)
+	g.GET("/api/alert-sources/:id", api.alertSources.alertSource)
+	g.PUT("/api/alert-sources/:id", api.alertSources.alertSource)
+	g.DELETE("/api/alert-sources/:id", api.alertSources.alertSource)
+	g.POST("/api/alert-sources/:id/run", api.alertSources.runNow)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodGet} {
 		g.Handle(method, webhookIngressPrefix+":id/:secret", api.webhooks.ingest)
 	}

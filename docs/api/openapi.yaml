@@ -2922,6 +2922,141 @@ paths:
                   $ref: "#/components/schemas/WebhookDelivery"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/alert-sources:
+    get:
+      tags: [Webhooks]
+      operationId: listAlertSources
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: webhookId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pull alert sources with their poll state, by name
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AlertSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      tags: [Webhooks]
+      operationId: createAlertSource
+      description: Creates a pull alert source on a webhook. It is polled at once, from lookbackSeconds before now.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertSourceInput"
+      responses:
+        "201":
+          description: Created source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Not a project writer, or no signed-in user
+  /api/alert-sources/preview:
+    post:
+      tags: [Webhooks]
+      operationId: previewAlertSource
+      description: Fetches the most recent window for an unsaved configuration and returns up to 5 alerts with the IDs and titles they would get. Admits nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertSourceInput"
+      responses:
+        "200":
+          description: Preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertSourcePreview"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          description: The product's API call failed; error says why
+  /api/alert-sources/{sourceId}:
+    parameters:
+      - name: sourceId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Webhooks]
+      operationId: getAlertSource
+      responses:
+        "200":
+          description: Source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertSource"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Webhooks]
+      operationId: updateAlertSource
+      description: Replaces the configuration; the checkpoint and poll state are kept. Enabling a disabled source polls it at once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertSourceInput"
+      responses:
+        "200":
+          description: Updated source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertSource"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Webhooks]
+      operationId: deleteAlertSource
+      description: Deletes the source and the alert IDs it remembered. Alerts and cases it created stay.
+      responses:
+        "200":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/alert-sources/{sourceId}/run:
+    parameters:
+      - name: sourceId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Webhooks]
+      operationId: runAlertSource
+      description: Polls an enabled source at the next poller tick instead of its scheduled time.
+      responses:
+        "202":
+          description: Queued
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The source is disabled
   /api/hooks/{webhookId}/{secret}:
     parameters:
       - name: webhookId
@@ -6099,6 +6234,12 @@ components:
           items:
             type: string
           description: Names of the secrets that have a value.
+        tlsCertSha256:
+          type: string
+          description: SHA-256 of the server certificate (64 hex). Pins a self-signed certificate; the CA chain is not checked unless tlsCaPem is set.
+        tlsCaPem:
+          type: string
+          description: PEM CA certificates trusted for this connection only.
         createdBy:
           type: integer
         createdAt:
@@ -6131,6 +6272,12 @@ components:
           type: array
           items:
             type: string
+        tlsCertSha256:
+          type: string
+          description: Replaces the stored value; an empty string clears it. SHA-256 of the server certificate (64 hex). Pins a self-signed certificate; the CA chain is not checked unless tlsCaPem is set.
+        tlsCaPem:
+          type: string
+          description: PEM CA certificates trusted for this connection only.
     NodeAction:
       type: object
       required: [connector, action]
@@ -6272,6 +6419,135 @@ components:
           type: string
         sourceIp:
           type: string
+        sourceId:
+          type: string
+          description: The alert source that pulled the alert; empty for a pushed delivery.
+    AlertSourceInput:
+      type: object
+      required: [projectId, webhookId, name, connectionId, action]
+      properties:
+        projectId:
+          type: string
+        webhookId:
+          type: string
+          description: Pulled alerts go through this webhook's mapping, deduplication, case mode and SOP.
+        name:
+          type: string
+        enabled:
+          type: boolean
+        connectionId:
+          type: string
+        action:
+          type: string
+          description: A read-only action of the connection's connector that lists alerts or their IDs.
+        inputs:
+          type: object
+          additionalProperties:
+            type: string
+          description: Action inputs; values may be {{ }} templates over window (since, until, sinceIso, untilIso, sinceMs, untilMs, limit).
+        itemsField:
+          type: string
+          default: items
+        detailAction:
+          type: string
+          description: Optional action that turns listed IDs into alerts; it receives them in detailInput, in batches of 100.
+        detailInput:
+          type: string
+        idPath:
+          type: string
+          description: Dot path to the alert ID; an alert is admitted once per ID. Empty uses the whole alert.
+        timePath:
+          type: string
+          description: Dot path to the alert time; lets a pass that returned pageLimit alerts resume from the last one.
+        pollSeconds:
+          type: integer
+          minimum: 30
+          maximum: 86400
+          default: 60
+        lagSeconds:
+          type: integer
+          default: 60
+          description: How far behind now a window ends, for products that index late.
+        windowSeconds:
+          type: integer
+          default: 3600
+          description: Longest window one pass reads.
+        pageLimit:
+          type: integer
+          default: 500
+        lookbackSeconds:
+          type: integer
+          description: Where a new source starts, before its creation time.
+    AlertSource:
+      allOf:
+        - $ref: "#/components/schemas/AlertSourceInput"
+        - type: object
+          properties:
+            id:
+              type: string
+            createdBy:
+              type: integer
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+            state:
+              type: object
+              properties:
+                checkpoint:
+                  type: string
+                  format: date-time
+                  description: End of the last window fully read.
+                nextRunAt:
+                  type: string
+                  format: date-time
+                lastRunAt:
+                  type: string
+                  format: date-time
+                lastSuccessAt:
+                  type: string
+                  format: date-time
+                lastError:
+                  type: string
+                lastWarning:
+                  type: string
+                failures:
+                  type: integer
+                lastFetched:
+                  type: integer
+                lastAdmitted:
+                  type: integer
+                totalAdmitted:
+                  type: integer
+    AlertSourcePreview:
+      type: object
+      properties:
+        since:
+          type: string
+          format: date-time
+        until:
+          type: string
+          format: date-time
+        fetched:
+          type: integer
+        items:
+          type: array
+          items:
+            type: object
+        ids:
+          type: array
+          items:
+            type: string
+        titles:
+          type: array
+          items:
+            type: string
+        warning:
+          type: string
+        durationMs:
+          type: integer
     WorkflowNode:
       type: object
       required: [id, name, type]

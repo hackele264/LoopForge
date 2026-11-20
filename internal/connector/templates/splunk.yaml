@@ -1,0 +1,56 @@
+id: splunk
+title: Splunk
+vendor: Splunk
+description: 在 Splunk 上执行只读搜索（oneshot）。服务地址填管理端口，例如 https://splunk.example.com:8089；自签证书在连接里填证书 SHA-256 指纹。可作为拉取式告警源读取 notable 等索引。
+docs: https://docs.splunk.com/Documentation/Splunk/latest/RESTREF/RESTsearch
+auth:
+  type: bearer
+  secret: token
+secrets:
+  - name: token
+    label: 认证 Token
+    description: Splunk 认证 Token（设置 → Tokens），只需要搜索权限
+    required: true
+testAction: search
+testInputs:
+  search: "| makeresults count=1"
+  earliest: "-1m"
+actions:
+  - id: search
+    title: 搜索（oneshot）
+    description: 同步执行一次只读搜索，返回结果行。搜索语句以 search 或 | 开头。
+    category: enrichment
+    inputs:
+      - name: search
+        label: 搜索语句
+        type: string
+        required: true
+        description: 例如 search index=notable | sort 0 _time
+      - name: earliest
+        label: 起始时间
+        type: string
+        default: "-15m"
+        description: Splunk 时间修饰符或 Unix 秒
+      - name: latest
+        label: 结束时间
+        type: string
+        default: "now"
+      - name: count
+        label: 最多返回行数
+        type: number
+        default: 500
+    request:
+      method: POST
+      path: /services/search/jobs
+      form:
+        search: "{{ inputs.search }}"
+        exec_mode: oneshot
+        output_mode: json
+        earliest_time: "{{ inputs.earliest }}"
+        latest_time: "{{ inputs.latest }}"
+        count: "{{ inputs.count }}"
+        max_count: "{{ inputs.count }}"
+    timeoutSeconds: 60
+    output:
+      items: response.body.results
+      count: len(response.body.results)

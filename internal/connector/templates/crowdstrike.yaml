@@ -1,7 +1,7 @@
 id: crowdstrike
 title: CrowdStrike Falcon
 vendor: CrowdStrike
-description: 按主机名查找 Falcon 终端，网络隔离（contain）或解除隔离。其他云区域请在连接里改服务地址，例如 https://api.eu-1.crowdstrike.com。
+description: 按主机名查找 Falcon 终端，网络隔离（contain）或解除隔离；查询告警，可作为拉取式告警源。其他云区域请在连接里改服务地址，例如 https://api.eu-1.crowdstrike.com。
 docs: https://falcon.crowdstrike.com/documentation
 baseUrl: https://api.crowdstrike.com
 auth:
@@ -66,3 +66,47 @@ actions:
         action_name: lift_containment
       body:
         ids: ["{{ inputs.device_id }}"]
+  - id: list_alert_ids
+    title: 查询告警 ID
+    description: 按 FQL 过滤查询告警（Alerts API v2），返回 composite_id 列表。需要 Alerts:Read 权限。
+    category: enrichment
+    inputs:
+      - name: filter
+        label: FQL 过滤条件
+        type: string
+        required: true
+        description: 例如 created_timestamp:>'2026-11-20T00:00:00Z'+product:'epp'
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 500
+      - name: sort
+        label: 排序
+        type: string
+        default: created_timestamp.asc
+    request:
+      method: GET
+      path: /alerts/queries/alerts/v2
+      query:
+        filter: "{{ inputs.filter }}"
+        limit: "{{ inputs.limit }}"
+        sort: "{{ inputs.sort }}"
+    output:
+      items: response.body.resources
+      total: response.body.meta.pagination.total
+  - id: get_alerts
+    title: 获取告警详情
+    description: 按 composite_id 获取告警详情（Alerts API v2）。
+    category: enrichment
+    inputs:
+      - name: ids
+        label: 告警 composite_id 列表
+        type: list
+        required: true
+    request:
+      method: POST
+      path: /alerts/entities/alerts/v2
+      body:
+        composite_ids: "{{ inputs.ids }}"
+    output:
+      items: response.body.resources

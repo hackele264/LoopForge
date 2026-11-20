@@ -193,6 +193,9 @@ func (h *webhooksHandlers) webhook(c *gin.Context) {
 			respond(c, err)
 			return
 		}
+		if err := h.repo.DeleteAlertSourcesOfWebhook(current.ID); err != nil {
+			log.Printf("webhook %s: delete its alert sources: %v", current.ID, err)
+		}
 		c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 	default:
 		var next domain.Webhook
@@ -396,6 +399,26 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 	var plain any
 	_ = json.Unmarshal(trigger, &plain)
 
+	res := h.admitAlert(w, trigger, plain, now, &delivery, fmt.Sprintf("Webhook「%s」", w.Name))
+	if res.err != nil {
+		respond(c, res.err)
+		return
+	}
+	c.JSON(res.status, res.body)
+}
+
+// admission is how an admitted alert ended. err is set for storage
+// failures, which a pushed request reports through respond.
+type admission struct {
+	status int
+	body   gin.H
+	err    error
+}
+
+// admitAlert runs one alert through a webhook's deduplication, alert and
+// case records and SOP, and records the delivery. origin names where the
+// alert came from in timelines ("Webhook「x」" or "拉取源「x」").
+func (h *webhooksHandlers) admitAlert(w domain.Webhook, trigger []byte, plain any, now time.Time, delivery *domain.WebhookDelivery, origin string) admission {
 	fingerprint := domain.WebhookFingerprint(plain, w.DedupFields)
 	delivery.Fingerprint = fingerprint
 	alert := domain.Alert{
@@ -408,9 +431,8 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 		claim, err := h.repo.ClaimWebhookFingerprint(w.ID, fingerprint, time.Duration(w.DedupWindowSeconds)*time.Second, now)
 		if err != nil {
 			delivery.Status, delivery.HTTPStatus, delivery.Message = domain.WebhookDeliveryFailed, http.StatusInternalServerError, err.Error()
-			h.recordDelivery(delivery)
-			respond(c, err)
-			return
+			h.recordDelivery(*delivery)
+			return admission{status: http.StatusInternalServerError, err: err}
 		}
 		if !claim.Claimed {
 			outcome, err := h.cases.recordAlert(w, alert, &claim)
@@ -423,12 +445,11 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 			}
 			delivery.Status, delivery.HTTPStatus, delivery.RunID, delivery.CaseID = domain.WebhookDeliveryDeduplicated, http.StatusOK, claim.RunID, caseID
 			delivery.Message = fmt.Sprintf("duplicate alert #%d within the dedup window", claim.Hits)
-			h.recordDelivery(delivery)
+			h.recordDelivery(*delivery)
 			if claim.RunID != "" {
-				h.engine.AppendRunEvent(claim.RunID, "webhook.duplicate", fmt.Sprintf("Webhook「%s」收到重复告警（第 %d 次），未启动新运行", w.Name, claim.Hits))
+				h.engine.AppendRunEvent(claim.RunID, "webhook.duplicate", fmt.Sprintf("%s收到重复告警（第 %d 次），未启动新运行", origin, claim.Hits))
 			}
-			c.JSON(http.StatusOK, gin.H{"status": domain.WebhookDeliveryDeduplicated, "runId": claim.RunID, "hits": claim.Hits, "alertId": alert.ID, "caseId": caseID})
-			return
+			return admission{status: http.StatusOK, body: gin.H{"status": domain.WebhookDeliveryDeduplicated, "runId": claim.RunID, "hits": claim.Hits, "alertId": alert.ID, "caseId": caseID}}
 		}
 	}
 	outcome, err := h.cases.recordAlert(w, alert, nil)
@@ -437,9 +458,8 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 			_ = h.repo.ReleaseWebhookFingerprint(w.ID, fingerprint)
 		}
 		delivery.Status, delivery.HTTPStatus, delivery.Message = domain.WebhookDeliveryFailed, http.StatusInternalServerError, "store alert: "+err.Error()
-		h.recordDelivery(delivery)
-		respond(c, err)
-		return
+		h.recordDelivery(*delivery)
+		return admission{status: http.StatusInternalServerError, err: err}
 	}
 	caseID := ""
 	if outcome.Case != nil {
@@ -457,12 +477,11 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 			_ = h.repo.ReleaseWebhookFingerprint(w.ID, fingerprint)
 		}
 		if outcome.Case != nil {
-			_ = h.repo.AppendCaseEvents(caseID, caseEvent(domain.CaseEventUpdated, fmt.Sprintf("Webhook「%s」的处置流程未能启动：%v", w.Name, err), domain.Actor{Kind: domain.ActorSystem}, nil, time.Now().UTC()))
+			_ = h.repo.AppendCaseEvents(caseID, caseEvent(domain.CaseEventUpdated, fmt.Sprintf("%s的处置流程未能启动：%v", origin, err), domain.Actor{Kind: domain.ActorSystem}, nil, time.Now().UTC()))
 		}
 		delivery.Status, delivery.HTTPStatus, delivery.Message = domain.WebhookDeliveryFailed, http.StatusServiceUnavailable, err.Error()
-		h.recordDelivery(delivery)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "run could not start: " + err.Error(), "alertId": alert.ID, "caseId": caseID})
-		return
+		h.recordDelivery(*delivery)
+		return admission{status: http.StatusServiceUnavailable, body: gin.H{"error": "run could not start: " + err.Error(), "alertId": alert.ID, "caseId": caseID}}
 	}
 	if fingerprint != "" {
 		_ = h.repo.SetWebhookFingerprintRun(w.ID, fingerprint, run.ID)
@@ -470,15 +489,15 @@ func (h *webhooksHandlers) ingest(c *gin.Context) {
 	if err := h.repo.SetAlertRun(alert.ID, run.ID); err != nil {
 		log.Printf("webhook %s: link alert %s to run: %v", w.ID, alert.ID, err)
 	}
-	h.engine.AppendRunEvent(run.ID, "webhook.received", fmt.Sprintf("由 Webhook「%s」触发", w.Name))
+	h.engine.AppendRunEvent(run.ID, "webhook.received", fmt.Sprintf("由 %s触发", origin))
 	if outcome.Case != nil {
-		_ = h.repo.AppendCaseEvents(caseID, caseEvent(domain.CaseEventRunStarted, fmt.Sprintf("Webhook「%s」启动了运行 %s", w.Name, run.ID), domain.Actor{Kind: domain.ActorSystem}, map[string]any{"runId": run.ID, "workflowId": w.WorkflowID}, time.Now().UTC()))
+		_ = h.repo.AppendCaseEvents(caseID, caseEvent(domain.CaseEventRunStarted, fmt.Sprintf("%s启动了运行 %s", origin, run.ID), domain.Actor{Kind: domain.ActorSystem}, map[string]any{"runId": run.ID, "workflowId": w.WorkflowID}, time.Now().UTC()))
 		alert.RunID, alert.CaseID = run.ID, caseID
 		h.cases.fireCaseTriggers(*outcome.Case, domain.CaseEventCreated, &alert)
 	}
 	delivery.Status, delivery.HTTPStatus, delivery.RunID = domain.WebhookDeliveryStarted, http.StatusAccepted, run.ID
-	h.recordDelivery(delivery)
-	c.JSON(http.StatusAccepted, gin.H{"status": domain.WebhookDeliveryStarted, "runId": run.ID, "alertId": alert.ID, "caseId": caseID})
+	h.recordDelivery(*delivery)
+	return admission{status: http.StatusAccepted, body: gin.H{"status": domain.WebhookDeliveryStarted, "runId": run.ID, "alertId": alert.ID, "caseId": caseID}}
 }
 
 func newAlertID(now time.Time) string {

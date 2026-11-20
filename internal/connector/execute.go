@@ -61,6 +61,7 @@ type Executor struct {
 	client *http.Client
 	cases  CaseService
 	tokens *tokenCache
+	tls    tlsClients
 }
 
 // NewExecutor returns an executor using client (nil for a default client)
@@ -365,7 +366,11 @@ func (x *Executor) executeHTTP(ctx context.Context, call Call, inputs map[string
 		return Result{}, err
 	}
 	req.Header = headers
-	resp, err := x.client.Do(req)
+	client, err := x.clientFor(conn)
+	if err != nil {
+		return Result{}, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return Result{}, fmt.Errorf("%s 请求失败：%w", c.Title, err)
 	}
@@ -553,7 +558,11 @@ func (x *Executor) oauthToken(ctx context.Context, c *Connector, conn *domain.Co
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	resp, err := x.client.Do(req)
+	client, err := x.clientFor(conn)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("获取 %s 访问令牌失败：%w", c.Title, err)
 	}
