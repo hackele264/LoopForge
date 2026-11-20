@@ -43,6 +43,20 @@ checkpoint, so the next pass reads the same window again. Retries back off
 from `pollSeconds`, doubling to at most 10 minutes. A source whose webhook is
 disabled does not call the product and reports why.
 
+### Rate limits
+
+When the webhook has a [rate limit](webhooks.md#rate-limit) and a pass
+spends it, the pass stops at the first refused alert, which is logged as a
+`rate_limited` delivery. Nothing is dropped: the refused and remaining
+alerts are not marked as admitted, the checkpoint stays where the pass
+started, and the next pass is due after the limit's `Retry-After` (at least
+a second). That pass reads the same window again and admits only what was
+not admitted yet. This is not a failure: the backoff does not grow and the
+source shows a warning instead of an error.
+
+The connector call itself follows the connection's own rate limit and
+retries (see [connectors](connectors.md#rate-limits-and-retries)).
+
 Only read-only actions (categories enrichment and utility) can list alerts:
 a source runs unattended, so a response action is refused.
 
@@ -123,7 +137,8 @@ creator, like pushed alerts.
 
 - No pagination cursor: one call per window, bounded by `pageLimit`, with
   `timePath` to resume a full page.
-- No per-source rate limit beyond `pollSeconds` and the backoff.
+- No per-source rate limit beyond `pollSeconds`, the backoff, the webhook's
+  alert limit and the connection's request limit.
 - An alert dropped because it was larger than the trigger payload limit is
   logged and skipped.
 

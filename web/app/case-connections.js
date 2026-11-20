@@ -11,6 +11,12 @@ function connectionFormBody(def,form,existing){
   // TLS fields are sent whenever the form has them: an empty value clears.
   if(form.tlsCertSha256!==undefined)body.tlsCertSha256=String(form.tlsCertSha256||'').trim();
   if(form.tlsCaPem!==undefined)body.tlsCaPem=String(form.tlsCaPem||'').trim();
+  // Rate and retry fields, likewise: empty means unlimited / the default
+  // number of retries (null restores it).
+  const num=v=>{const n=Number(String(v??'').trim());return String(v??'').trim()!==''&&Number.isFinite(n)?n:null};
+  if(form.rateLimitPerSecond!==undefined)body.rateLimitPerSecond=num(form.rateLimitPerSecond)||0;
+  if(form.rateLimitBurst!==undefined)body.rateLimitBurst=Math.round(num(form.rateLimitBurst)||0);
+  if(form.maxRetries!==undefined){const n=num(form.maxRetries);body.maxRetries=n===null?null:Math.round(n)}
   return body;
 }
 // Required fields the form leaves empty (a stored secret counts as set).
@@ -63,6 +69,12 @@ function connectionFormHTML(existing){
       <label class="field"><span>CA 证书（PEM，可选）</span><textarea class="input" name="tlsCaPem" rows="3" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----">${escapeHTML(existing?.tlsCaPem||'')}</textarea></label>
       <p class="prop-hint">只填指纹时只认这一张证书、不校验签发链；填了 CA 时按 CA 校验，再核对指纹。</p>
     </details>
+    <details class="conn-tls" ${existing?.rateLimitPerSecond||existing?.maxRetries!=null?'open':''}><summary>限流与重试</summary>
+      ${field('rateLimitPerSecond','每秒请求数（留空不限）',existing?.rateLimitPerSecond||'','type="number" min="0" max="1000" step="any" placeholder="不限"')}
+      ${field('rateLimitBurst','突发上限',existing?.rateLimitBurst||'','type="number" min="0" max="1000" placeholder="1"')}
+      ${field('maxRetries','失败重试次数',existing?.maxRetries??'','type="number" min="0" max="10" placeholder="默认 3"')}
+      <p class="prop-hint">超出限流的调用排队等待。HTTP 429 对所有请求重试；5xx 和网络错误只对 GET 重试，处置类动作不会重复发送。等待遵循 Retry-After，最长 60 秒。限流按平台进程分别计算。</p>
+    </details>
     <p class="case-form-error" role="alert"></p>
     <div class="conn-form-actions"><button type="submit" class="button primary small">${existing?'保存':'创建连接'}</button><button type="button" class="button ghost small" data-conn-cancel>取消</button></div></form>`;
 }
@@ -85,7 +97,7 @@ function bindConnections(host){
       e.preventDefault();
       const existing=connState.editing==='new'?null:connState.list.find(c=>c.id===connState.editing);
       const def=connectionDef(existing?existing.connectorId:connState.connector);if(!def)return;
-      const values={projectId:project,name:form.elements.name.value,baseUrl:form.elements.baseUrl.value,params:{},secrets:{},tlsCertSha256:form.elements.tlsCertSha256.value,tlsCaPem:form.elements.tlsCaPem.value};
+      const values={projectId:project,name:form.elements.name.value,baseUrl:form.elements.baseUrl.value,params:{},secrets:{},tlsCertSha256:form.elements.tlsCertSha256.value,tlsCaPem:form.elements.tlsCaPem.value,rateLimitPerSecond:form.elements.rateLimitPerSecond.value,rateLimitBurst:form.elements.rateLimitBurst.value,maxRetries:form.elements.maxRetries.value};
       [...form.elements].forEach(el=>{const [kind,name]=String(el.name||'').split(':');if(kind==='param')values.params[name]=el.value;if(kind==='secret')values.secrets[name]=el.value});
       const err=form.querySelector('.case-form-error');
       const missing=connectionFormMissing(def,values,existing);

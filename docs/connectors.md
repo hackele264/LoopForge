@@ -94,6 +94,8 @@ A connection belongs to one project and one connector. It holds:
   trusts a PEM CA bundle for this connection only; with both set the chain is
   checked first, then the pin. Both need an `https://` address.
 
+- **限流与重试**: optional request rate limit and retry count, below.
+
 Project members of any role may list connections; owners, maintainers and
 members may create, edit, test and delete them. 测试 runs the connector's
 read-only test action and shows the outcome without the response body.
@@ -105,6 +107,41 @@ applied after the request is built, and secret values are replaced with
 another host, so header credentials cannot leak through one. Secrets are
 stored in the database without encryption, like the platform's other
 credentials; restrict database access accordingly.
+
+## Rate limits and retries
+
+| Field | Default | Range | Effect |
+|---|---|---|---|
+| `rateLimitPerSecond` | 0 (unlimited) | 0 – 1000, fractions allowed | Requests per second sent through the connection |
+| `rateLimitBurst` | 1 | 0 – 1000 | Requests that may go at once before the rate applies |
+| `maxRetries` | 3 | 0 – 10 | Retries of one call; 0 turns them off |
+
+A call over the rate limit waits for its turn; cancelling the run stops the
+wait. Every attempt, retries included, takes a turn. The limit is a
+token bucket in the memory of each platform process, shared by action
+nodes, 测试 and pull alert sources in that process: several processes each
+send up to the limit.
+
+A failed call is retried inside the action, before the node's `maxAttempts`
+is consulted, so retries do not use up node attempts:
+
+- **HTTP 429** is retried for every method: the vendor refused the request
+  without processing it.
+- **HTTP 5xx and transport errors** (connection refused, reset, timeout) are
+  retried for GET only. A response action (POST, PUT, PATCH, DELETE) may
+  have taken effect before the error, so it is never sent twice.
+- A status the action lists in `success` is never retried.
+
+The wait is the vendor's `Retry-After` (seconds or an HTTP date) when sent,
+otherwise exponential backoff from 0.5 s, doubling to at most 30 s, with
+jitter; any wait is capped at 60 s. A wait that would outlast the node's
+cancellation ends the call with the last response instead. Each attempt has
+the action's full `timeoutSeconds`.
+
+Retries are recorded in the action output as `retries` (attempt, status or
+error, wait in milliseconds) and in the summary as "重试 N 次"; a call that
+still fails says how many retries it made. Error text in the log has secret
+values replaced, like any connector error.
 
 ## Inputs and outputs
 
@@ -223,12 +260,16 @@ cannot push to a webhook: see [pull alert sources](alert-sources.md).
 ## Storage
 
 Table `connections` is created by gorm's incremental AutoMigrate;
-`migrations/042_connections.sql` is the manual equivalent.
+`migrations/042_connections.sql` is the manual equivalent. Rate limit and
+retry settings are fields of the stored JSON payload and need no DDL
+(`migrations/046_phase6_backpressure.sql`).
 
 ## Not covered yet
 
-- No per-connection rate limiting or retry with backoff beyond the node's
-  `maxAttempts`.
+- The per-connection rate limit is per platform process, not shared across
+  processes or with other systems using the same vendor account.
+- Response actions are not retried on 5xx or transport errors; the node's
+  `maxAttempts` decides whether the whole action runs again.
 - Secrets are not encrypted at rest.
 - Read-only connector actions are not offered to Agents as MCP tools; an
   Agent can use a vendor's own MCP server instead.

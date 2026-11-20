@@ -15,6 +15,12 @@ function webhookFormBody(form){
   };
   if(fields.length&&Number.isFinite(minutes)&&minutes>0)body.dedupWindowSeconds=Math.round(minutes*60);
   if(String(form.signingSecret||'').trim())body.signingSecret=String(form.signingSecret).trim();
+  // Rate limit: empty or 0 is unlimited; the burst only applies with a rate.
+  const rate=Math.round(Number(form.rateLimitPerMinute)),burst=Math.round(Number(form.rateLimitBurst));
+  if(Number.isFinite(rate)&&rate>0){
+    body.rateLimitPerMinute=rate;
+    if(Number.isFinite(burst)&&burst>0)body.rateLimitBurst=burst;
+  }
   return body;
 }
 function webhookURL(origin,path){return String(origin||'').replace(/\/+$/,'')+path}
@@ -22,7 +28,7 @@ function webhookCurlExample(url){
   return `curl -X POST '${url}' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"alert":{"title":"测试告警","severity":"high"}}'`;
 }
 function webhookDeliveryLabel(d){
-  return ({started:'已启动运行',deduplicated:'重复告警，已合并',rejected:'已拒绝',failed:'启动失败'})[d?.status]||d?.status||'';
+  return ({started:'已启动运行',deduplicated:'重复告警，已合并',rejected:'已拒绝',rate_limited:'超出限流',failed:'启动失败'})[d?.status]||d?.status||'';
 }
 // Where a delivery came from: the pulling source's name, or the caller.
 function webhookDeliveryOrigin(d,sources){
@@ -72,6 +78,11 @@ function webhookFormHTML(w){
       <label class="field"><span>去重字段（逗号分隔，留空不去重）</span><input class="input mono" name="dedupFields" value="${escapeHTML((v.dedupFields||[]).join(', '))}" placeholder="alert.rule, alert.host"></label>
       <label class="field webhook-narrow"><span>去重窗口（分钟）</span><input class="input" name="dedupMinutes" type="number" min="1" max="10080" value="${Math.round((v.dedupWindowSeconds||3600)/60)}"></label>
     </div>
+    <div class="webhook-row">
+      <label class="field"><span>限流（每分钟新告警数，留空不限）</span><input class="input" name="rateLimitPerMinute" type="number" min="0" max="60000" value="${v.rateLimitPerMinute||''}" placeholder="不限"></label>
+      <label class="field webhook-narrow"><span>突发上限</span><input class="input" name="rateLimitBurst" type="number" min="0" max="10000" value="${v.rateLimitBurst||''}" placeholder="同每分钟"></label>
+    </div>
+    <p class="prop-hint">超出限流的告警返回 HTTP 429 和 Retry-After，记入调用记录；被去重合并的告警不占额度。额度按平台进程分别计算。</p>
     <label class="field"><span>来源地址白名单（IP 或 CIDR，留空不限）</span><input class="input mono" name="allowedCidrs" value="${escapeHTML((v.allowedCidrs||[]).join(', '))}" placeholder="10.0.0.0/8, 192.0.2.7"></label>
     <div class="webhook-methods"><span>允许的方法</span>${['POST','PUT','GET'].map(m=>`<label class="fd-check"><input type="checkbox" name="method" value="${m}" ${methods.includes(m)?'checked':''}><span>${m}</span></label>`).join('')}</div>
     <div class="webhook-row">
@@ -98,6 +109,7 @@ function webhookCardHTML(w){
   const facts=[
     w.dedupFields?.length?`去重：${w.dedupFields.join(' + ')} · ${webhookWindowText(w.dedupWindowSeconds)}`:'不去重',
     w.caseMode==='per_fingerprint'?'按指纹建案':w.caseMode==='per_alert'?'每条告警建案':'',
+    w.rateLimitPerMinute?`限流 ${w.rateLimitPerMinute} 条/分钟${w.rateLimitBurst?`，突发 ${w.rateLimitBurst}`:''}`:'',
     w.allowedCidrs?.length?`白名单 ${w.allowedCidrs.length} 条`:'不限来源',
     w.signatureHeader?`签名：${w.signatureHeader}`:'',
     w.lastTriggeredAt?`最近触发 ${new Date(w.lastTriggeredAt).toLocaleString()}`:'尚未触发',
@@ -128,7 +140,7 @@ function renderWorkflowWebhooks(){
 
 function readWebhookForm(form){
   const wf=state.workflow,f=form.elements;
-  return webhookFormBody({projectId:wf.projectId,workflowId:wf.id,name:f.name.value,titleField:f.titleField.value,severityField:f.severityField.value,caseMode:f.caseMode.value,dedupFields:f.dedupFields.value,dedupMinutes:f.dedupMinutes.value,allowedCidrs:f.allowedCidrs.value,signatureHeader:f.signatureHeader.value,signingSecret:f.signingSecret.value,enabled:f.enabled.checked,methods:[...form.querySelectorAll('[name=method]:checked')].map(b=>b.value)});
+  return webhookFormBody({projectId:wf.projectId,workflowId:wf.id,name:f.name.value,titleField:f.titleField.value,severityField:f.severityField.value,caseMode:f.caseMode.value,dedupFields:f.dedupFields.value,dedupMinutes:f.dedupMinutes.value,allowedCidrs:f.allowedCidrs.value,signatureHeader:f.signatureHeader.value,signingSecret:f.signingSecret.value,rateLimitPerMinute:f.rateLimitPerMinute.value,rateLimitBurst:f.rateLimitBurst.value,enabled:f.enabled.checked,methods:[...form.querySelectorAll('[name=method]:checked')].map(b=>b.value)});
 }
 
 function bindWorkflowWebhooks(host){

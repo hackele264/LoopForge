@@ -46,12 +46,20 @@ type Webhook struct {
 	// CaseMode decides whether alerts open cases: "" keeps them as alerts
 	// only, per_fingerprint opens one case per new fingerprint (duplicates
 	// join it), per_alert opens a case for every alert.
-	CaseMode           string     `json:"caseMode,omitempty"`
-	DedupWindowSeconds int        `json:"dedupWindowSeconds,omitempty"`
-	CreatedBy          int64      `json:"createdBy,omitempty"`
-	CreatedAt          time.Time  `json:"createdAt"`
-	UpdatedAt          time.Time  `json:"updatedAt"`
-	LastTriggeredAt    *time.Time `json:"lastTriggeredAt,omitempty"`
+	CaseMode           string `json:"caseMode,omitempty"`
+	DedupWindowSeconds int    `json:"dedupWindowSeconds,omitempty"`
+	// RateLimitPerMinute caps how many alerts start work (a run, an alert
+	// record, a case) per minute; 0 is unlimited. Alerts over the limit get
+	// HTTP 429 with Retry-After. Duplicates absorbed by deduplication do not
+	// count. The limit is kept in each platform process's memory.
+	RateLimitPerMinute int `json:"rateLimitPerMinute,omitempty"`
+	// RateLimitBurst is how many alerts may arrive at once before the
+	// per-minute rate applies; 0 uses RateLimitPerMinute.
+	RateLimitBurst  int        `json:"rateLimitBurst,omitempty"`
+	CreatedBy       int64      `json:"createdBy,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
+	LastTriggeredAt *time.Time `json:"lastTriggeredAt,omitempty"`
 }
 
 // Webhook limits.
@@ -60,6 +68,8 @@ const (
 	WebhookDefaultDedupWind = 60 * 60
 	WebhookMaxFields        = 16
 	WebhookMaxPathLength    = 200
+	WebhookMaxRatePerMinute = 60000
+	WebhookMaxRateBurst     = 10000
 )
 
 // WebhookDelivery records one inbound call for troubleshooting.
@@ -67,7 +77,7 @@ type WebhookDelivery struct {
 	ID          string    `json:"id"`
 	WebhookID   string    `json:"webhookId"`
 	ReceivedAt  time.Time `json:"receivedAt"`
-	Status      string    `json:"status"` // started, deduplicated, rejected, failed
+	Status      string    `json:"status"` // started, deduplicated, rejected, rate_limited, failed
 	HTTPStatus  int       `json:"httpStatus"`
 	RunID       string    `json:"runId,omitempty"`
 	AlertID     string    `json:"alertId,omitempty"`
@@ -105,6 +115,7 @@ const (
 	WebhookDeliveryStarted      = "started"
 	WebhookDeliveryDeduplicated = "deduplicated"
 	WebhookDeliveryRejected     = "rejected"
+	WebhookDeliveryRateLimited  = "rate_limited"
 	WebhookDeliveryFailed       = "failed"
 )
 
@@ -190,7 +201,25 @@ func (w Webhook) Validate() error {
 	if w.DedupWindowSeconds < 0 || w.DedupWindowSeconds > WebhookMaxDedupWindow {
 		return fmt.Errorf("dedupWindowSeconds must be between 0 and %d", WebhookMaxDedupWindow)
 	}
+	if w.RateLimitPerMinute < 0 || w.RateLimitPerMinute > WebhookMaxRatePerMinute {
+		return fmt.Errorf("rateLimitPerMinute must be between 0 and %d", WebhookMaxRatePerMinute)
+	}
+	if w.RateLimitBurst < 0 || w.RateLimitBurst > WebhookMaxRateBurst {
+		return fmt.Errorf("rateLimitBurst must be between 0 and %d", WebhookMaxRateBurst)
+	}
+	if w.RateLimitBurst > 0 && w.RateLimitPerMinute == 0 {
+		return fmt.Errorf("rateLimitBurst needs rateLimitPerMinute")
+	}
 	return nil
+}
+
+// AlertRateBurst is the burst the alert limit allows: RateLimitBurst, or
+// RateLimitPerMinute when unset.
+func (w Webhook) AlertRateBurst() int {
+	if w.RateLimitBurst > 0 {
+		return w.RateLimitBurst
+	}
+	return w.RateLimitPerMinute
 }
 
 // AllowsMethod reports whether method may call the webhook.

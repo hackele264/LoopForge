@@ -26,6 +26,7 @@ import (
 	"agentflow/internal/mcpserver"
 	"agentflow/internal/notification"
 	"agentflow/internal/observability"
+	"agentflow/internal/ratelimit"
 	"agentflow/internal/repo"
 	"agentflow/internal/runtime"
 	"agentflow/internal/schedule"
@@ -126,6 +127,7 @@ func NewWithNotificationsAndBackground(ctx context.Context, s *repo.Store, e *en
 	})
 	if bg.alertSources != nil {
 		bg.alertSources.start(ctx)
+		bg.alertSources.webhooks.startFingerprintPurge(ctx, webhookFingerprintPurgeEvery)
 	}
 	return router, bg
 }
@@ -186,7 +188,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	e.WorkspaceActive = func(run domain.Run) bool { return api.runs.terminals.HasRunScope(run.ID) }
 	api.catalog.notifications = api.notifications
 	api.schedule.notifications = api.notifications
-	api.webhooks = &webhooksHandlers{deps: d, cases: api.cases}
+	api.webhooks = &webhooksHandlers{deps: d, cases: api.cases, limits: ratelimit.NewRegistry()}
 	api.connections = newConnectionsHandlers(d, api.cases)
 	api.alertSources = newAlertSourcesHandlers(d, api.webhooks)
 	if bg != nil {

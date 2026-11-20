@@ -3,6 +3,7 @@ package httpapi
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -59,6 +60,13 @@ type connectionInput struct {
 	// an empty string clears them.
 	TLSCertSHA256 *string `json:"tlsCertSha256"`
 	TLSCAPEM      *string `json:"tlsCaPem"`
+	// RateLimitPerSecond and RateLimitBurst replace the stored values when
+	// present; 0 removes the limit.
+	RateLimitPerSecond *float64 `json:"rateLimitPerSecond"`
+	RateLimitBurst     *int     `json:"rateLimitBurst"`
+	// MaxRetries replaces the stored value when present; null restores the
+	// default.
+	MaxRetries json.RawMessage `json:"maxRetries"`
 }
 
 func newConnectionID() (string, error) {
@@ -134,6 +142,23 @@ func applyConnectionInput(conn *domain.Connection, def *connector.Connector, req
 	}
 	if req.TLSCAPEM != nil {
 		conn.TLSCAPEM = strings.TrimSpace(*req.TLSCAPEM)
+	}
+	if req.RateLimitPerSecond != nil {
+		conn.RateLimitPerSecond = *req.RateLimitPerSecond
+	}
+	if req.RateLimitBurst != nil {
+		conn.RateLimitBurst = *req.RateLimitBurst
+	}
+	if len(req.MaxRetries) > 0 {
+		if string(req.MaxRetries) == "null" {
+			conn.MaxRetries = nil
+		} else {
+			var n int
+			if err := json.Unmarshal(req.MaxRetries, &n); err != nil {
+				return fmt.Errorf("maxRetries must be a whole number")
+			}
+			conn.MaxRetries = &n
+		}
 	}
 	if req.Params != nil {
 		params := map[string]string{}

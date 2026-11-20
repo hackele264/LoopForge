@@ -47,4 +47,12 @@ assert.deepEqual(plain(context.connectionFormBody(def, {projectId: 'p', name: ' 
 assert.equal(plain(context.connectionFormBody(def, {name: 'n', secrets: {}}, {id: 'cn'})).projectId, undefined);
 assert.deepEqual(plain(context.connectionFormBody(def, {name: 'n', secrets: {}, tlsCertSha256: ' AB:CD ', tlsCaPem: ''}, {id: 'cn'})),
   {name: 'n', baseUrl: '', params: {}, secrets: {}, tlsCertSha256: 'AB:CD', tlsCaPem: ''});
+const limits = plain(context.connectionFormBody(def, {name: 'n', secrets: {}, rateLimitPerSecond: '2.5', rateLimitBurst: '4', maxRetries: '0'}, {id: 'cn'}));
+assert.equal(limits.rateLimitPerSecond, 2.5);
+assert.equal(limits.rateLimitBurst, 4);
+assert.equal(limits.maxRetries, 0);
+const defaults = plain(context.connectionFormBody(def, {name: 'n', secrets: {}, rateLimitPerSecond: '', rateLimitBurst: '', maxRetries: ''}, {id: 'cn'}));
+assert.equal(defaults.rateLimitPerSecond, 0);
+assert.equal(defaults.rateLimitBurst, 0);
+assert.equal(defaults.maxRetries, null);
 console.log('flow actions ok');
