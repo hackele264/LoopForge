@@ -2485,6 +2485,170 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           description: Not a member (read) or writer (write) of the project
+  /api/connectors:
+    get:
+      tags: [Connectors]
+      operationId: listConnectors
+      summary: List the connector catalog
+      description: Every connector with its actions, their inputs and output fields, and the params and secret names a connection needs. The built-in connector `loopforge` needs no connection.
+      responses:
+        "200":
+          description: Connectors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Connector"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/connectors/{connectorId}:
+    parameters:
+      - name: connectorId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Connectors]
+      operationId: getConnector
+      responses:
+        "200":
+          description: Connector
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connector"
+        "404":
+          description: Unknown connector
+  /api/connections:
+    get:
+      tags: [Connectors]
+      operationId: listConnections
+      summary: List a project's connections
+      description: Readable by project members of any role. Secret values are never returned.
+      parameters:
+        - name: projectId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: connectorId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Connections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Connection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Not a member of the project
+    post:
+      tags: [Connectors]
+      operationId: createConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionInput"
+      responses:
+        "201":
+          description: Connection created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Not a writer of the project
+  /api/connections/{connectionId}:
+    parameters:
+      - name: connectionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Connectors]
+      operationId: getConnection
+      responses:
+        "200":
+          description: Connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "404":
+          description: Unknown connection
+    put:
+      tags: [Connectors]
+      operationId: updateConnection
+      description: Empty or omitted secrets keep their stored values; clearSecrets removes secrets.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConnectionInput"
+      responses:
+        "200":
+          description: Connection updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      tags: [Connectors]
+      operationId: deleteConnection
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Unknown connection
+  /api/connections/{connectionId}/test:
+    parameters:
+      - name: connectionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Connectors]
+      operationId: testConnection
+      summary: Run the connector's read-only test action with this connection
+      responses:
+        "200":
+          description: Test outcome; ok is false when the vendor call failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  action:
+                    type: string
+                  summary:
+                    type: string
+                  error:
+                    type: string
+                  output:
+                    $ref: "#/components/schemas/OpenObject"
+                  durationMs:
+                    type: integer
+        "400":
+          description: The connector has no test action
   /api/case-triggers:
     get:
       tags: [Cases]
@@ -5749,6 +5913,165 @@ components:
         createdAt:
           type: string
           format: date-time
+    Connector:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        vendor:
+          type: string
+        description:
+          type: string
+        docs:
+          type: string
+        baseUrl:
+          type: string
+        builtin:
+          type: boolean
+        source:
+          type: string
+        auth:
+          $ref: "#/components/schemas/OpenObject"
+        params:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConnectorField"
+        secrets:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConnectorField"
+        testAction:
+          type: string
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConnectorAction"
+    ConnectorField:
+      type: object
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+        default:
+          type: string
+    ConnectorAction:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [enrichment, response, utility]
+          description: Response actions may only run after an approval node.
+        inputs:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              label:
+                type: string
+              type:
+                type: string
+                enum: [string, number, boolean, list, object, any]
+              required:
+                type: boolean
+              description:
+                type: string
+              default: {}
+              enum:
+                type: array
+                items:
+                  type: string
+        output:
+          type: object
+          additionalProperties:
+            type: string
+        outputFields:
+          type: array
+          items:
+            type: string
+    Connection:
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        connectorId:
+          type: string
+        name:
+          type: string
+        baseUrl:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        secretsSet:
+          type: array
+          items:
+            type: string
+          description: Names of the secrets that have a value.
+        createdBy:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ConnectionInput:
+      type: object
+      properties:
+        projectId:
+          type: string
+        connectorId:
+          type: string
+        name:
+          type: string
+        baseUrl:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        secrets:
+          type: object
+          additionalProperties:
+            type: string
+          writeOnly: true
+        clearSecrets:
+          type: array
+          items:
+            type: string
+    NodeAction:
+      type: object
+      required: [connector, action]
+      properties:
+        connector:
+          type: string
+        action:
+          type: string
+        connectionId:
+          type: string
+        inputs:
+          type: object
+          additionalProperties:
+            type: string
+          description: 'Templates; "{{ expr }}" parts read trigger, nodes and run like runIf.'
     CaseTrigger:
       type: object
       required: [projectId, workflowId, name, events]
@@ -5887,7 +6210,9 @@ components:
           type: string
         type:
           type: string
-          enum: [agent, script, command, approval, sop]
+          enum: [agent, script, command, approval, sop, action]
+        action:
+          $ref: "#/components/schemas/NodeAction"
         agentId:
           type: string
         executorId:

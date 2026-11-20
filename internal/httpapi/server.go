@@ -75,6 +75,7 @@ type Server struct {
 	insights        *insightsHandlers
 	webhooks        *webhooksHandlers
 	cases           *casesHandlers
+	connections     *connectionsHandlers
 	businessDomains *businessDomainsHandlers
 	catalog         *catalogHandlers  // catalog.go
 	mcp             *mcpHandlers      // mcp.go
@@ -181,6 +182,8 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	api.catalog.notifications = api.notifications
 	api.schedule.notifications = api.notifications
 	api.webhooks = &webhooksHandlers{deps: d, cases: api.cases}
+	api.connections = newConnectionsHandlers(d, api.cases)
+	e.SetCaseService(api.cases)
 	if syncSvc != nil {
 		e.MergeIntoBranch = syncSvc.EnsureAndMergeBranchMR
 		e.FindBranchMR = syncSvc.FindBranchMR
@@ -505,6 +508,14 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.POST("/api/case-triggers", api.cases.caseTriggers)
 	g.PUT("/api/case-triggers/:id", api.cases.caseTrigger)
 	g.DELETE("/api/case-triggers/:id", api.cases.caseTrigger)
+	g.GET("/api/connectors", api.connections.connectors)
+	g.GET("/api/connectors/:id", api.connections.connectorByID)
+	g.GET("/api/connections", api.connections.connections)
+	g.POST("/api/connections", api.connections.connections)
+	g.GET("/api/connections/:id", api.connections.connection)
+	g.PUT("/api/connections/:id", api.connections.connection)
+	g.DELETE("/api/connections/:id", api.connections.connection)
+	g.POST("/api/connections/:id/test", api.connections.testConnection)
 	g.GET("/api/webhooks", api.webhooks.webhooks)
 	g.POST("/api/webhooks", api.webhooks.webhooks)
 	g.GET("/api/webhooks/:id", api.webhooks.webhook)

@@ -148,6 +148,11 @@ const (
 	CaseEventComment         = "case.comment"
 	CaseEventIOCAdded        = "case.ioc_added"
 	CaseEventRunStarted      = "case.run_started"
+	// CaseEventAction records a connector action a playbook ran on the case.
+	CaseEventAction = "case.action"
+	// CaseEventApproval records a person approving or rejecting a step of
+	// a run on the case.
+	CaseEventApproval = "case.approval"
 )
 
 // CaseTriggerEvents lists the events a trigger may subscribe to.

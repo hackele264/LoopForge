@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"agentflow/internal/connector"
 	"agentflow/internal/domain"
 	"agentflow/internal/gitwork"
 	"agentflow/internal/repo"
@@ -237,7 +238,7 @@ func resolveNodeExecutor(st *repo.Store, node domain.WorkflowNode, agent domain.
 func workflowSandboxRequirements(st *repo.Store, wf domain.WorkflowDefinition) (runtime.SandboxRequirements, error) {
 	var requirements []runtime.SandboxRequirements
 	for _, node := range wf.Nodes {
-		if node.Type == "script" || node.Type == "command" || node.Type == "approval" || node.Type == "sop" {
+		if node.Type == "script" || node.Type == "command" || node.Type == "approval" || node.Type == "sop" || node.Type == connector.NodeType {
 			continue
 		}
 		agent, ok := workflowAgent(st, wf, node.AgentID)
@@ -378,6 +379,10 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 	}
 	if node.Type == "sop" {
 		e.executeSOPNode(ctx, runID, wf, node, executionAttempt, executionGeneration)
+		return
+	}
+	if node.Type == connector.NodeType {
+		e.executeActionNode(ctx, runID, wf, node, executionAttempt, executionGeneration)
 		return
 	}
 	if node.Type == "approval" {

@@ -1,0 +1,36 @@
+id: dingtalk_bot
+title: 钉钉群机器人
+vendor: 钉钉
+description: 向钉钉群发送通知。密钥是机器人 Webhook 地址中 access_token= 后面的部分；机器人的安全设置需用“自定义关键词”或“IP 地址段”，不支持“加签”。
+docs: https://open.dingtalk.com/document/robots/custom-robot-access
+baseUrl: https://oapi.dingtalk.com
+auth:
+  type: query
+  name: access_token
+  secret: access_token
+secrets:
+  - name: access_token
+    label: access_token
+    required: true
+actions:
+  - id: send_markdown
+    title: 发送 Markdown 消息
+    category: utility
+    inputs:
+      - name: title
+        label: 标题
+        type: string
+        required: true
+      - name: content
+        label: 内容
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /robot/send
+      body:
+        msgtype: markdown
+        markdown:
+          title: "{{ inputs.title }}"
+          text: "{{ inputs.content }}"
+    failIf: response.body.errcode != 0

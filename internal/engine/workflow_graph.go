@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"agentflow/internal/connector"
 	"agentflow/internal/domain"
 	"agentflow/internal/repo"
 	"fmt"
@@ -195,7 +196,10 @@ func validate(wf domain.WorkflowDefinition) error {
 	if err := validateDAG(ids, wf.Edges); err != nil {
 		return err
 	}
-	return domain.ValidateWorkflowBranching(wf)
+	if err := domain.ValidateWorkflowBranching(wf); err != nil {
+		return err
+	}
+	return connector.ValidateWorkflow(wf, connector.Default())
 }
 
 // validateNode checks one node's own fields: its type-specific settings, the
@@ -204,6 +208,8 @@ func validate(wf domain.WorkflowDefinition) error {
 func validateNode(workflowID string, n domain.WorkflowNode) error {
 	switch n.Type {
 	case "agent", "approval":
+	case connector.NodeType:
+		// Checked against the connector catalog in validate.
 	case "sop":
 		if strings.TrimSpace(n.SOPWorkflowID) == "" {
 			return fmt.Errorf("node %s sopWorkflowId is required", n.ID)

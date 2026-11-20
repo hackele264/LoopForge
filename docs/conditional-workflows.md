@@ -48,11 +48,12 @@ Expressions read three roots and have no side effects:
 - `trigger`: the run's trigger payload.
 - `nodes["<id>"]` or `nodes.<id>`: `.status`, `.data` (structured output) and
   `.gate` (an agent's submitted gate result).
-- `run`: `.id` and `.input`.
+- `run`: `.id`, `.input`, `.caseId` and `.projectId`.
 
 Operators: `== != < <= > >= in && || !`, unary `-`, list literals `[..]`.
 Functions: `len`, `lower`, `upper`, `contains`, `startsWith`, `endsWith`,
-`exists`. A missing field reads as `null`; ordering against `null` is false.
+`exists`, plus `iocs`, `first`, `join`, `split`, `coalesce`, `str` and
+`base64url` (see [connectors](connectors.md#inputs-and-outputs)). A missing field reads as `null`; ordering against `null` is false.
 An evaluation error (for example comparing a number with a string) fails the
 node, which an error edge can handle.
 

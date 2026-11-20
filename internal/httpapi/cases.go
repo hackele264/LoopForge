@@ -448,10 +448,37 @@ func (h *casesHandlers) caseByID(c *gin.Context) {
 	if !decode(c, &req) {
 		return
 	}
-	actor := h.requestActor(c.Request)
+	updated, err := h.applyCaseUpdate(current.ID, req, h.requestActor(c.Request), nil)
+	if err != nil {
+		respondCaseError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
+// applyCaseUpdate changes a case, records each change on its timeline with
+// actor (and extra event data, when set) and fires the matching case
+// triggers. The UI, the API and playbook actions all go through it.
+func (h *casesHandlers) applyCaseUpdate(caseID string, req caseUpdate, actor domain.Actor, extra map[string]any) (domain.Case, error) {
 	now := time.Now().UTC()
 	var fired []string
-	updated, err := h.repo.UpdateCase(current.ID, func(cs *domain.Case, _ int) (repo.CaseChange, error) {
+	data := func(d map[string]any) any {
+		if len(extra) == 0 {
+			if d == nil {
+				return nil
+			}
+			return d
+		}
+		merged := map[string]any{}
+		for k, v := range extra {
+			merged[k] = v
+		}
+		for k, v := range d {
+			merged[k] = v
+		}
+		return merged
+	}
+	updated, err := h.repo.UpdateCase(caseID, func(cs *domain.Case, _ int) (repo.CaseChange, error) {
 		var events []domain.CaseEvent
 		before := *cs
 		if req.Title != nil {
@@ -459,12 +486,12 @@ func (h *casesHandlers) caseByID(c *gin.Context) {
 				return repo.CaseChange{}, fmt.Errorf("title must be 1 to 300 characters")
 			} else if t != cs.Title {
 				cs.Title = t
-				events = append(events, caseEvent(domain.CaseEventUpdated, "标题改为："+t, actor, nil, now))
+				events = append(events, caseEvent(domain.CaseEventUpdated, "标题改为："+t, actor, data(nil), now))
 			}
 		}
 		if req.Description != nil && strings.TrimSpace(*req.Description) != cs.Description {
 			cs.Description = strings.TrimSpace(*req.Description)
-			events = append(events, caseEvent(domain.CaseEventUpdated, "更新了描述", actor, nil, now))
+			events = append(events, caseEvent(domain.CaseEventUpdated, "更新了描述", actor, data(nil), now))
 		}
 		if req.Tags != nil {
 			cs.Tags = trimTags(*req.Tags)
@@ -474,10 +501,10 @@ func (h *casesHandlers) caseByID(c *gin.Context) {
 				return repo.CaseChange{}, err
 			}
 			cs.Severity = *req.Severity
-			events = append(events, caseEvent(domain.CaseEventSeverityChanged, fmt.Sprintf("严重度 %s → %s", before.Severity, cs.Severity), actor, map[string]any{"from": before.Severity, "to": cs.Severity}, now))
+			events = append(events, caseEvent(domain.CaseEventSeverityChanged, fmt.Sprintf("严重度 %s → %s", before.Severity, cs.Severity), actor, data(map[string]any{"from": before.Severity, "to": cs.Severity}), now))
 			fired = append(fired, domain.CaseEventSeverityChanged)
 			if domain.SeverityRank(cs.Severity) > domain.SeverityRank(before.Severity) && domain.SeverityRank(cs.Severity) >= domain.SeverityRank(domain.SeverityHigh) {
-				events = append(events, caseEvent(domain.CaseEventEscalated, "案件升级为 "+cs.Severity, actor, nil, now))
+				events = append(events, caseEvent(domain.CaseEventEscalated, "案件升级为 "+cs.Severity, actor, data(nil), now))
 				fired = append(fired, domain.CaseEventEscalated)
 			}
 		}
@@ -502,25 +529,24 @@ func (h *casesHandlers) caseByID(c *gin.Context) {
 				} else {
 					cs.ClosedAt = nil
 				}
-				events = append(events, caseEvent(domain.CaseEventStatusChanged, fmt.Sprintf("状态 %s → %s", before.Status, statusLabel(status, resolution)), actor, map[string]any{"from": before.Status, "to": status, "resolution": resolution}, now))
+				events = append(events, caseEvent(domain.CaseEventStatusChanged, fmt.Sprintf("状态 %s → %s", before.Status, statusLabel(status, resolution)), actor, data(map[string]any{"from": before.Status, "to": status, "resolution": resolution}), now))
 				fired = append(fired, domain.CaseEventStatusChanged)
 			}
 		}
 		if req.AssigneeID != nil && *req.AssigneeID != cs.AssigneeID {
 			cs.AssigneeID = *req.AssigneeID
-			events = append(events, caseEvent(domain.CaseEventAssigned, fmt.Sprintf("负责人改为用户 #%d", cs.AssigneeID), actor, map[string]any{"assigneeId": cs.AssigneeID}, now))
+			events = append(events, caseEvent(domain.CaseEventAssigned, fmt.Sprintf("负责人改为用户 #%d", cs.AssigneeID), actor, data(map[string]any{"assigneeId": cs.AssigneeID}), now))
 		}
 		cs.UpdatedAt = now
 		return repo.CaseChange{Events: events}, nil
 	})
 	if err != nil {
-		respondCaseError(c, err)
-		return
+		return domain.Case{}, err
 	}
 	for _, kind := range fired {
 		h.fireCaseTriggers(updated, kind, nil)
 	}
-	c.JSON(http.StatusOK, updated)
+	return updated, nil
 }
 
 func statusLabel(status, resolution string) string {

@@ -203,11 +203,12 @@ function addNode(type,opts={}){
     return;
   }
   flowHistory.record();
-  const labels={agent:'新 Agent 节点',script:'脚本节点',approval:'人工门禁',sop:'SOP 节点'};
+  const labels={agent:'新 Agent 节点',script:'脚本节点',approval:'人工门禁',sop:'SOP 节点',action:'动作节点'};
   const firstSOP=type==='sop'?sopWorkflowChoices(state.workflow.id)[0]:null;
   const agentId=type==='agent'?(opts.agentId||workflowAgents()[0]?.id||''):'';
   const agent=agentId?workflowAgent(agentId):null;
   const node={id:uid(type),name:firstSOP?.name||(opts.agentId&&agent?.name)||labels[type]||'新节点',type,agentId,sopWorkflowId:firstSOP?.id||'',scriptLanguage:type==='script'?'shell':'',script:type==='script'?"printf 'passed\\n'":'',executionScope:'run',artifactOutputs:firstSOP?sopDeclaredArtifacts(firstSOP):[],rejectTo:'',onFailure:'fail',retryStrategy:'targeted_fix',carryOver:['failed_checks','last_error','upstream_artifacts'],maxAttempts:1,maxReworks:3,position:at};
+  if(type==='action')node.action={connector:'',action:'',connectionId:'',inputs:{}};
   state.workflow.nodes.push(node);state.selectedNode=node.id;
   dirty();renderCanvas();renderProperties();
 }
@@ -276,12 +277,12 @@ function spreadCrowdedNodes(wf){
   return true;
 }
 
-const FLOW_NODE_TYPES={agent:{icon:'bot',label:'Agent 步骤'},script:{icon:'terminal',label:'脚本步骤'},sop:{icon:'layers',label:'子 SOP'},preview:{icon:'eye',label:'预览构建'},approval:{icon:'shield',label:'人工门禁'}};
+const FLOW_NODE_TYPES={agent:{icon:'bot',label:'Agent 步骤'},script:{icon:'terminal',label:'脚本步骤'},sop:{icon:'layers',label:'子 SOP'},action:{icon:'zap',label:'动作'},preview:{icon:'eye',label:'预览构建'},approval:{icon:'shield',label:'人工门禁'}};
 function flowNodeKind(n){return isPreviewBuildNode(n.id)?'preview':(FLOW_NODE_TYPES[n.type]?n.type:'approval')}
 function flowNodeTint(n){
   const kind=flowNodeKind(n);
   if(kind==='agent'&&n.agentId)return flowPalette.roleTint(n.agentId);
-  return {agent:'79 107 255',script:'139 92 246',sop:'14 165 233',preview:'217 119 6',approval:'16 163 127'}[kind];
+  return {agent:'79 107 255',script:'139 92 246',sop:'14 165 233',action:'234 88 12',preview:'217 119 6',approval:'16 163 127'}[kind];
 }
 function flowNodeEl(id){return document.querySelector(`#nodes .flow-node[data-id="${CSS.escape(id)}"]`)}
 function nodeMeta(n){
@@ -305,6 +306,7 @@ function nodeMeta(n){
     const line=(n.script||'').trim().split('\n')[0];
     return {kind:'script',subtitle:n.scriptLanguage==='python'?'Python 脚本':'Shell 脚本',tags:[line?{text:line,mono:true}:{text:'未配置脚本',warn:true}]};
   }
+  if(n.type==='action')return flowActionMeta(n);
   if(n.type==='sop'){
     const wf=sopWorkflowChoices().find(w=>w.id===n.sopWorkflowId)||(state.data.workflows||[]).find(w=>w.id===n.sopWorkflowId);
     const arts=(n.artifactOutputs||[]).map(a=>a.name).filter(Boolean);
@@ -490,7 +492,7 @@ function flowDiagnostics(){
   const nodes=state.workflow.nodes||[],edges=state.workflow.edges||[],incoming=new Map(nodes.map(n=>[n.id,0])),items=[];edges.forEach(e=>incoming.has(e.target)&&incoming.set(e.target,incoming.get(e.target)+1));
   const starts=nodes.filter(n=>incoming.get(n.id)===0);items.push({level:!nodes.length?'error':starts.length===1?'ok':'warn',title:'流程入口',detail:!nodes.length?'至少添加一个节点':starts.length===1?`从「${starts[0].name}」开始`:`检测到 ${starts.length} 个入口；这些节点会并行启动`});
   items.push({level:state.data.sandboxes?.some(s=>s.id===state.workflow.sandboxProfileId)?'ok':'error',title:'运行沙箱',detail:state.workflow.sandboxProfileId?`整条流程使用 ${state.workflow.sandboxProfileId}`:'尚未选择 Workflow 运行沙箱'});
-  nodes.forEach(n=>{if(isPreviewBuildNode(n.id)){const inDeg=edges.filter(e=>e.target===n.id).length;items.push({level:inDeg?'ok':'warn',title:n.name,detail:inDeg?`插在流程中间：CodeBuddy ${workflowPreviewModel(state.workflow)} 构建静态站点，运行成功后归档预览`:'还没有前序依赖，会作为流程入口直接运行；请从上游节点连线到此'});return}if(n.type==='agent'){const missing=[];const agent=workflowAgent(n.agentId);const generic=catalogGeneric(state.workflow);if(!n.agentId)missing.push('角色');else if(!agent)missing.push(generic?'通用模板角色未加载':'角色不属于当前项目或未共享');else if(!generic&&!(agent.executorId||n.executorId))missing.push('角色未选模型');if(!(n.artifactOutputs||[]).length&&!(agent?.artifactOutputs||[]).length)missing.push('角色产物契约');items.push({level:missing.length?'warn':'ok',title:n.name,detail:missing.length?`尚未配置：${missing.join('、')}`:generic?'已绑定通用模板角色；任务书与门禁在角色定义中':'已绑定角色；任务书与门禁在角色定义中'})}if(n.type==='sop'){const missing=[];const wf=sopWorkflowChoices(state.workflow.id).find(w=>w.id===n.sopWorkflowId)||(state.data.workflows||[]).find(w=>w.id===n.sopWorkflowId);if(!n.sopWorkflowId)missing.push('要跑的 SOP');else if(!wf)missing.push('引用的 SOP 不存在');if(n.sopWorkflowId===state.workflow.id)missing.push('不能引用自己');items.push({level:missing.length?'error':'ok',title:n.name,detail:missing.length?`尚未配置：${missing.join('、')}`:`引用「${wf.name}」，产物交给下一步`})}if(n.rejectTo&&!nodes.some(x=>x.id===n.rejectTo))items.push({level:'error',title:n.name,detail:'失败打回目标不存在'})});
+  nodes.forEach(n=>{if(isPreviewBuildNode(n.id)){const inDeg=edges.filter(e=>e.target===n.id).length;items.push({level:inDeg?'ok':'warn',title:n.name,detail:inDeg?`插在流程中间：CodeBuddy ${workflowPreviewModel(state.workflow)} 构建静态站点，运行成功后归档预览`:'还没有前序依赖，会作为流程入口直接运行；请从上游节点连线到此'});return}if(n.type==='agent'){const missing=[];const agent=workflowAgent(n.agentId);const generic=catalogGeneric(state.workflow);if(!n.agentId)missing.push('角色');else if(!agent)missing.push(generic?'通用模板角色未加载':'角色不属于当前项目或未共享');else if(!generic&&!(agent.executorId||n.executorId))missing.push('角色未选模型');if(!(n.artifactOutputs||[]).length&&!(agent?.artifactOutputs||[]).length)missing.push('角色产物契约');items.push({level:missing.length?'warn':'ok',title:n.name,detail:missing.length?`尚未配置：${missing.join('、')}`:generic?'已绑定通用模板角色；任务书与门禁在角色定义中':'已绑定角色；任务书与门禁在角色定义中'})}if(n.type==='sop'){const missing=[];const wf=sopWorkflowChoices(state.workflow.id).find(w=>w.id===n.sopWorkflowId)||(state.data.workflows||[]).find(w=>w.id===n.sopWorkflowId);if(!n.sopWorkflowId)missing.push('要跑的 SOP');else if(!wf)missing.push('引用的 SOP 不存在');if(n.sopWorkflowId===state.workflow.id)missing.push('不能引用自己');items.push({level:missing.length?'error':'ok',title:n.name,detail:missing.length?`尚未配置：${missing.join('、')}`:`引用「${wf.name}」，产物交给下一步`})}if(n.type==='action')items.push(flowActionReadiness(n));if(n.rejectTo&&!nodes.some(x=>x.id===n.rejectTo))items.push({level:'error',title:n.name,detail:'失败打回目标不存在'})});
   items.push(...flowBranchDiagnostics(state.workflow));
   if(nodes.length>1&&edges.length===0)items.push({level:'warn',title:'成功路径',detail:'多个节点之间没有依赖关系，将同时启动'});if(!items.some(x=>x.level==='error'))items.push({level:'ok',title:'结构校验',detail:'未发现阻止保存或试运行的结构错误'});return items;
 }
@@ -1177,7 +1179,8 @@ function renderProperties(){
     const scriptPreview=scriptLines?`<div class="script-snippet-preview" id="previewScriptNodeEditor" title="点击在代码编辑器中修改"><code>${escapeHTML(n.script.slice(0, 120))}${n.script.length>120?'…':''}</code></div>`:'';
     const scriptPane=n.type==='script'?`<div class="fd-row2"><div class="fd-field"><label>脚本语言</label><select class="select" data-p="scriptLanguage"><option value="shell" ${n.scriptLanguage!=='python'?'selected':''}>Shell</option><option value="python" ${n.scriptLanguage==='python'?'selected':''}>Python</option></select></div><div class="fd-field"><label>执行范围</label><select class="select" data-p="executionScope"><option value="run" ${n.executionScope!=='repositories'?'selected':''}>Run 工作区</option><option value="repositories" ${n.executionScope==='repositories'?'selected':''}>每个代码仓库</option></select></div></div><div class="fd-field"><label>脚本内容</label><button type="button" class="script-editor-launch-btn btn-open-code-editor" id="openScriptNodeEditor"><span>${flowPalette.icon('code',14)} 打开代码编辑器编写脚本</span><span class="script-btn-badge">${scriptCountText}</span></button>${scriptPreview}<p class="prop-hint">逐仓库执行时会自动进入每个仓库根目录，无需手写 cd。</p></div>`:'';
     const approvalPane=n.type==='approval'?`<div class="fd-field"><label>需要确认什么（可选）</label><textarea class="input" rows="4" data-p="taskPrompt" placeholder="例如：检查 MR 的改动范围和测试结果，确认可以上线">${escapeHTML(n.taskPrompt||'')}</textarea><p class="prop-hint">确认步骤会停在「待我确认」，批准后才继续；这段说明会和上下游一起展示给确认人。</p></div>${flowApproverFieldHTML(n)}`:'';
-    const main=`<section class="fd-sec"><div class="fd-sec-h"><span class="fd-sec-t">主配置</span></div><div class="fd-sec-b">${n.type==='agent'?agentBindCard(n):''}${sopSelect}${scriptPane}${approvalPane}</div></section>${flowBranchSectionHTML(n)}`;
+    const actionPane=n.type==='action'?flowActionPaneHTML(n):'';
+    const main=`<section class="fd-sec"><div class="fd-sec-h"><span class="fd-sec-t">主配置</span></div><div class="fd-sec-b">${n.type==='agent'?agentBindCard(n):''}${sopSelect}${scriptPane}${approvalPane}${actionPane}</div></section>${flowBranchSectionHTML(n)}`;
     const gates=n.type==='agent'?flowFold('gates','校验顺序',`${effectiveNodeArtifacts(n,workflowAgent(n.agentId)).length} 产物 · ${roleGates(workflowAgent(n.agentId)).length} 门禁`,nodeGatePane(n),false):'';
     const wantReject=state.flowWantReject??(n.onFailure==='reject');
     const targets=state.workflow.nodes.filter(x=>x.id!==n.id).map(x=>`<option value="${escapeHTML(x.id)}" ${x.id===n.rejectTo?'selected':''}>${escapeHTML(x.name)}</option>`).join('');
@@ -1187,6 +1190,7 @@ function renderProperties(){
     host.innerHTML=`${flowDrawerHead(n,kind,FLOW_NODE_TYPES[kind].label)}<div class="fd-db">${main}${gates}${fail}${adv}</div><div class="fd-df"><span class="fd-df-hint"><kbd>F2</kbd> 重命名 · <kbd>⌘D</kbd> 复制 · <kbd>Del</kbd> 删除 · <kbd>⌘Z</kbd> 撤销</span></div>`;
     bindNodeProperties(host,n);
     bindBranchFields(host,n);
+    if(n.type==='action')bindFlowActionPane(host,n);
   }
   host.querySelector('#closeNodeDrawer')?.addEventListener('click',closeNodeDrawer);
   const del=host.querySelector('#deletePropertyNode');if(del)del.onclick=()=>removeNode(n.id);

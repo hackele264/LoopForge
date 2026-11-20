@@ -36,7 +36,8 @@ const flowPalette=(()=>{
     link:'<path d="M7 17 17 7M9 7h8v8"/>',
     file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
     code:'<path d="m8 8-4 4 4 4M16 8l4 4-4 4"/>',
-    arrowUp:'<path d="M12 19V5M6 11l6-6 6 6"/>'
+    arrowUp:'<path d="M12 19V5M6 11l6-6 6 6"/>',
+    zap:'<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'
   };
   function icon(name,size=16,stroke=1.8){
     return `<svg class="fd-ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]||''}</svg>`;

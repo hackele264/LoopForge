@@ -190,7 +190,11 @@ func (e *Engine) ApproveAs(runID, nodeID, humanContext string, actor domain.Acto
 	e.eventBy(&r, nodeID, "gate.approved", "人工门禁已通过", actor)
 	appendControlTelemetry(&r, nodeID, "gate.approved", "人工门禁已通过")
 	r.Status = "running"
-	return e.persistControlDecision(runID, r, expected...)
+	if err := e.persistControlDecision(runID, r, expected...); err != nil {
+		return err
+	}
+	e.recordCaseDecision(r, nodeID, "批准", humanContext, actor)
+	return nil
 }
 
 // Pass marks a failed (or paused) node as succeeded so downstream can
@@ -382,6 +386,7 @@ func (e *Engine) RejectAs(runID string, req domain.RejectRequest, actor domain.A
 	if err := e.persistControlDecision(runID, r, expected...); err != nil {
 		return err
 	}
+	e.recordCaseDecision(r, req.NodeID, "打回", req.Reason, actor)
 	e.cancelNodeExecutions(runID, interrupted)
 	return nil
 }

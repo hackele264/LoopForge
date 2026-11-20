@@ -47,7 +47,7 @@ type WorkflowNode struct {
 	PlanItemID   string   `json:"planItemId,omitempty"`
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
-	Type         string   `json:"type"` // agent, script, approval, sop
+	Type         string   `json:"type"` // agent, script, approval, sop, action
 	// MetricStage explicitly assigns this node's execution time to a Loop phase.
 	// Empty means a legacy workflow without a classification; "none" opts out.
 	MetricStage string `json:"metricStage,omitempty"` // clarification, development, testing, none
@@ -90,6 +90,20 @@ type WorkflowNode struct {
 	// Approvers restricts who may decide an approval node. Nil keeps the
 	// legacy rule: any project writer may decide.
 	Approvers *ApproverPolicy `json:"approvers,omitempty"`
+	// Action configures an action node: a connector action the platform runs
+	// itself, outside any sandbox. See internal/connector.
+	Action *NodeAction `json:"action,omitempty"`
+}
+
+// NodeAction names the connector action an action node runs and how its
+// inputs are filled. Input values are templates: "{{ expr }}" parts are
+// evaluated against the run (trigger, nodes, run) like RunIf; a value that is
+// exactly one "{{ expr }}" keeps the expression's type.
+type NodeAction struct {
+	Connector    string            `json:"connector"`
+	Action       string            `json:"action"`
+	ConnectionID string            `json:"connectionId,omitempty"`
+	Inputs       map[string]string `json:"inputs,omitempty"`
 }
 
 // Join strategies for WorkflowNode.Join.

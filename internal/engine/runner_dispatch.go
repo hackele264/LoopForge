@@ -530,7 +530,7 @@ func (e *Engine) validateExecutionReconnect(run domain.Run, nodeID string) error
 			continue
 		}
 		provider := "terminal"
-		if node.Type != "script" && node.Type != "command" && node.Type != "approval" {
+		if node.Type != "script" && node.Type != "command" && node.Type != "approval" && node.Type != "action" {
 			agent, found := e.repo.Agent(node.AgentID)
 			if !found {
 				return fmt.Errorf("无法重连原执行环境：agent %s 不存在", node.AgentID)

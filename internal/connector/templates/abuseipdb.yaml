@@ -1,0 +1,43 @@
+id: abuseipdb
+title: AbuseIPDB
+vendor: AbuseIPDB
+description: 查询 IP 被举报的滥用置信度与举报次数。
+docs: https://docs.abuseipdb.com/
+baseUrl: https://api.abuseipdb.com
+auth:
+  type: header
+  name: Key
+  secret: api_key
+secrets:
+  - name: api_key
+    label: API Key
+    required: true
+testAction: check_ip
+testInputs:
+  ip: 8.8.8.8
+actions:
+  - id: check_ip
+    title: IP 滥用检查
+    category: enrichment
+    inputs:
+      - name: ip
+        label: IP 地址
+        type: string
+        required: true
+      - name: max_age_days
+        label: 统计天数
+        type: number
+        default: 90
+    request:
+      method: GET
+      path: /api/v2/check
+      query:
+        ipAddress: "{{ inputs.ip }}"
+        maxAgeInDays: "{{ inputs.max_age_days }}"
+    output:
+      abuseConfidenceScore: response.body.data.abuseConfidenceScore
+      totalReports: response.body.data.totalReports
+      countryCode: response.body.data.countryCode
+      isp: response.body.data.isp
+      usageType: response.body.data.usageType
+      isWhitelisted: response.body.data.isWhitelisted

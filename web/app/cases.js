@@ -13,7 +13,7 @@ function caseStatusText(status,resolution){
   return res?`${base} · ${res[1]}`:base;
 }
 function caseActorText(e){
-  if(e?.actorKind==='system')return '系统';
+  if(e?.actorKind==='system')return e?.data?.nodeId?'SOP 运行':'系统';
   if(e?.actorKind==='service')return '外部调用';
   if(e?.actorKind==='bot')return `机器人 · 用户 #${e.actorUserId||''}`;
   return e?.actorUserId?`用户 #${e.actorUserId}`:'—';
@@ -39,13 +39,21 @@ async function loadCasesView(){
   const host=$('#casesBody');if(!host)return;
   const project=casesProject();
   if(!project){casesState.error='';host.innerHTML='<div class="empty-inline"><p>先在顶部选择一个项目，再查看它的告警与案件。</p></div>';return}
+  // A newer load (tab or filter change) supersedes this one; its slower
+  // response must not overwrite the newer list.
+  const seq=casesState.seq=(casesState.seq||0)+1,tab=casesState.tab,filter=casesState.filter;
   casesState.loading=true;casesState.error='';renderCasesView();
+  let error='';
+  const got={};
   try{
-    if(casesState.tab==='cases')casesState.cases=await api(`/api/cases?projectId=${encodeURIComponent(project)}&status=${encodeURIComponent(casesState.filter==='all'?'':casesState.filter)}`,{silent:true});
-    if(casesState.tab==='alerts')casesState.alerts=await api(`/api/alerts?projectId=${encodeURIComponent(project)}${casesState.uncased?'&uncased=true':''}`,{silent:true});
-    if(casesState.tab==='triggers')casesState.triggers=await api(`/api/case-triggers?projectId=${encodeURIComponent(project)}`,{silent:true});
-  }catch(e){casesState.error=e.message}
-  casesState.loading=false;renderCasesView();
+    if(tab==='cases')got.cases=await api(`/api/cases?projectId=${encodeURIComponent(project)}&status=${encodeURIComponent(filter==='all'?'':filter)}`,{silent:true});
+    if(tab==='alerts')got.alerts=await api(`/api/alerts?projectId=${encodeURIComponent(project)}${casesState.uncased?'&uncased=true':''}`,{silent:true});
+    if(tab==='triggers')got.triggers=await api(`/api/case-triggers?projectId=${encodeURIComponent(project)}`,{silent:true});
+    if(tab==='connections')await loadCaseConnections(project);
+  }catch(e){error=e.message}
+  if(seq!==casesState.seq)return;
+  Object.assign(casesState,got);
+  casesState.error=error;casesState.loading=false;renderCasesView();
 }
 
 async function openCase(id){
@@ -121,9 +129,11 @@ function renderCasesView(){
   $$('#casesView [data-cases-tab]').forEach(b=>b.classList.toggle('active',b.dataset.casesTab===casesState.tab));
   const filters=casesState.tab==='cases'?`<div class="case-filters">${[['open','未关闭'],['closed','已关闭'],['all','全部']].map(([v,l])=>`<button type="button" class="${casesState.filter===v?'active':''}" data-case-filter="${v}">${l}</button>`).join('')}<button type="button" class="button ghost small" data-new-case>+ 新建案件</button></div>`
     :casesState.tab==='alerts'?`<div class="case-filters"><label class="fd-check"><input type="checkbox" data-uncased ${casesState.uncased?'checked':''}><span>只看未建案的告警</span></label></div>`:'';
-  const list=casesState.tab==='cases'?casesListHTML():casesState.tab==='alerts'?alertsListHTML():triggersHTML();
-  host.innerHTML=`${casesState.error?`<p class="case-form-error">${escapeHTML(casesState.error)}</p>`:''}${filters}<div class="cases-layout${casesState.detail&&casesState.tab!=='triggers'?' with-detail':''}"><div class="cases-list">${casesState.loading?'<p class="prop-hint">加载中…</p>':list}</div>${casesState.tab!=='triggers'?caseDetailHTML():''}</div>`;
+  const list=casesState.tab==='cases'?casesListHTML():casesState.tab==='alerts'?alertsListHTML():casesState.tab==='connections'?connectionsHTML():triggersHTML();
+  const side=casesState.tab==='cases'||casesState.tab==='alerts';
+  host.innerHTML=`${casesState.error?`<p class="case-form-error">${escapeHTML(casesState.error)}</p>`:''}${filters}<div class="cases-layout${casesState.detail&&side?' with-detail':''}"><div class="cases-list">${casesState.loading?'<p class="prop-hint">加载中…</p>':list}</div>${side?caseDetailHTML():''}</div>`;
   bindCasesView(host);
+  if(casesState.tab==='connections')bindConnections(host);
 }
 
 async function refreshCaseDetail(){if(casesState.detail)await openCase(casesState.detail.case.id);await loadCasesView()}
@@ -185,7 +195,7 @@ function bindCasesView(host){
 }
 
 function bindCasesTabs(){
-  $$('#casesView [data-cases-tab]').forEach(b=>b.onclick=()=>{casesState.tab=b.dataset.casesTab;if(casesState.tab==='triggers')casesState.detail=null;loadCasesView()});
+  $$('#casesView [data-cases-tab]').forEach(b=>b.onclick=()=>{casesState.tab=b.dataset.casesTab;if(casesState.tab==='triggers'||casesState.tab==='connections')casesState.detail=null;loadCasesView()});
   $('#refreshCases')?.addEventListener('click',()=>refreshCaseDetail());
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bindCasesTabs);else bindCasesTabs();

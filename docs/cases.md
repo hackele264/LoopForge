@@ -66,6 +66,16 @@ most 20 runs per case. Skipped starts are recorded on the timeline.
 A playbook can also be started on a case by hand (对此案件运行 SOP, or
 `POST /api/cases/{id}/runs`), as the requesting user.
 
+## Playbook actions
+
+Action nodes of the built-in connector (案件评论, 更新案件, 案件添加 IOC)
+change the run's case through the same path as the UI: their changes land on
+the timeline attributed to the run and fire case triggers. Every external
+connector action a case's run performs is recorded as `case.action`, and
+every approval or rejection of one of its steps as `case.approval` with the
+person who decided. See
+[connectors and action nodes](connectors.md).
+
 ## Agents
 
 Alert and case reads and writes are MCP tools (`alerts_*`, `cases_*`,

@@ -755,6 +755,7 @@ func allModels() []any {
 		insightSourceRow{}, insightExecutionRow{},
 		webhookRow{}, webhookDedupRow{}, webhookDeliveryRow{},
 		alertRow{}, caseRow{}, caseCounterRow{}, caseIOCRow{}, caseEventRow{}, caseTriggerRow{},
+		connectionRow{},
 		projectRow{}, projectMemberRow{}, repositoryRow{}, businessDomainRow{}, businessDomainAssignmentRow{},
 		agentRow{}, ruleRow{}, skillRow{}, skillFileRow{}, mcpServerRow{}, mcpFileRow{}, executorRow{},
 		dockerfileRow{}, environmentRow{}, sandboxRow{},

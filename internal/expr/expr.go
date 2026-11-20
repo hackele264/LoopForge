@@ -16,10 +16,14 @@
 package expr
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 )
@@ -87,8 +91,16 @@ func (p *Program) NodeRefs() []string {
 // Roots are the only identifiers an expression may start from.
 var Roots = map[string]bool{"trigger": true, "nodes": true, "run": true}
 
-// Compile parses src and checks that it only uses known roots and functions.
+// Compile parses src and checks that it only uses the workflow roots
+// (trigger, nodes, run) and known functions.
 func Compile(src string) (*Program, error) {
+	return CompileWith(src, Roots)
+}
+
+// CompileWith is Compile with a caller-chosen set of root names, for
+// expressions evaluated against something other than a run (for example a
+// connector action's response).
+func CompileWith(src string, roots map[string]bool) (*Program, error) {
 	src = strings.TrimSpace(src)
 	if src == "" {
 		return nil, fmt.Errorf("expression is empty")
@@ -108,7 +120,7 @@ func Compile(src string) (*Program, error) {
 	if t := p.peek(); t.kind != tokEOF {
 		return nil, fmt.Errorf("unexpected %q at offset %d", t.text, t.pos)
 	}
-	if err := checkNames(root); err != nil {
+	if err := checkNames(root, roots); err != nil {
 		return nil, err
 	}
 	return &Program{src: src, root: root}, nil
@@ -466,38 +478,38 @@ func (p *parser) parsePrimary(depth int) (node, error) {
 
 // checkNames rejects unknown roots and functions at compile time. Function
 // names are only valid in call position; bare identifiers must be roots.
-func checkNames(n node) error {
+func checkNames(n node, roots map[string]bool) error {
 	switch v := n.(type) {
 	case *identNode:
-		if !Roots[v.name] {
-			return fmt.Errorf("unknown name %q (use trigger, nodes or run)", v.name)
+		if !roots[v.name] {
+			return fmt.Errorf("unknown name %q (use %s)", v.name, rootList(roots))
 		}
 	case *memberNode:
-		return checkNames(v.target)
+		return checkNames(v.target, roots)
 	case *indexNode:
-		if err := checkNames(v.target); err != nil {
+		if err := checkNames(v.target, roots); err != nil {
 			return err
 		}
-		return checkNames(v.index)
+		return checkNames(v.index, roots)
 	case *unaryNode:
-		return checkNames(v.operand)
+		return checkNames(v.operand, roots)
 	case *binaryNode:
-		if err := checkNames(v.left); err != nil {
+		if err := checkNames(v.left, roots); err != nil {
 			return err
 		}
-		return checkNames(v.right)
+		return checkNames(v.right, roots)
 	case *callNode:
-		if _, ok := functions[v.name]; !ok {
+		if lookupFunction(v.name) == nil {
 			return fmt.Errorf("unknown function %q", v.name)
 		}
 		for _, a := range v.args {
-			if err := checkNames(a); err != nil {
+			if err := checkNames(a, roots); err != nil {
 				return err
 			}
 		}
 	case *listNode:
 		for _, a := range v.items {
-			if err := checkNames(a); err != nil {
+			if err := checkNames(a, roots); err != nil {
 				return err
 			}
 		}
@@ -579,7 +591,7 @@ func eval(n node, env map[string]any, depth int) (any, error) {
 			}
 			args = append(args, x)
 		}
-		return functions[v.name](args)
+		return lookupFunction(v.name)(args)
 	}
 	return nil, fmt.Errorf("unsupported expression")
 }
@@ -776,6 +788,63 @@ var functions = map[string]func([]any) (any, error){
 	},
 	"startsWith": func(a []any) (any, error) { return stringPair("startsWith", a, strings.HasPrefix) },
 	"endsWith":   func(a []any) (any, error) { return stringPair("endsWith", a, strings.HasSuffix) },
+	"base64url":  stringFn("base64url", func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }),
+	"str": func(a []any) (any, error) {
+		if err := arity("str", a, 1); err != nil {
+			return nil, err
+		}
+		return toText(a[0]), nil
+	},
+	"join": func(a []any) (any, error) {
+		if err := arity("join", a, 2); err != nil {
+			return nil, err
+		}
+		sep, _ := a[1].(string)
+		list, ok := a[0].([]any)
+		if !ok {
+			if a[0] == nil {
+				return "", nil
+			}
+			return nil, fmt.Errorf("join: expected list, got %s", typeName(a[0]))
+		}
+		parts := make([]string, 0, len(list))
+		for _, item := range list {
+			parts = append(parts, toText(item))
+		}
+		return strings.Join(parts, sep), nil
+	},
+	"split": func(a []any) (any, error) {
+		if err := arity("split", a, 2); err != nil {
+			return nil, err
+		}
+		s, ok1 := a[0].(string)
+		sep, ok2 := a[1].(string)
+		if !ok1 || !ok2 || sep == "" {
+			return nil, fmt.Errorf("split: expected two strings and a non-empty separator")
+		}
+		out := []any{}
+		for _, part := range strings.Split(s, sep) {
+			out = append(out, part)
+		}
+		return out, nil
+	},
+	"first": func(a []any) (any, error) {
+		if err := arity("first", a, 1); err != nil {
+			return nil, err
+		}
+		if list, ok := a[0].([]any); ok && len(list) > 0 {
+			return list[0], nil
+		}
+		return nil, nil
+	},
+	"coalesce": func(a []any) (any, error) {
+		for _, v := range a {
+			if s, ok := v.(string); v != nil && (!ok || s != "") {
+				return v, nil
+			}
+		}
+		return nil, nil
+	},
 	"exists": func(a []any) (any, error) {
 		if err := arity("exists", a, 1); err != nil {
 			return nil, err
@@ -824,4 +893,69 @@ func stringPair(name string, a []any, f func(string, string) bool) (any, error) 
 		return false, nil
 	}
 	return f(s, t), nil
+}
+
+// Function is a pure function callable from expressions. It receives
+// JSON-like values and must not perform I/O.
+type Function func(args []any) (any, error)
+
+var (
+	extraMu        sync.RWMutex
+	extraFunctions = map[string]Function{}
+)
+
+// RegisterFunction adds a function at process start, for helpers that live
+// in packages expr cannot import (IOC extraction lives in domain). Built-in
+// names cannot be replaced.
+func RegisterFunction(name string, fn Function) {
+	if fn == nil || functions[name] != nil {
+		return
+	}
+	extraMu.Lock()
+	defer extraMu.Unlock()
+	extraFunctions[name] = fn
+}
+
+func lookupFunction(name string) func([]any) (any, error) {
+	if fn := functions[name]; fn != nil {
+		return fn
+	}
+	extraMu.RLock()
+	defer extraMu.RUnlock()
+	if fn := extraFunctions[name]; fn != nil {
+		return fn
+	}
+	return nil
+}
+
+func rootList(roots map[string]bool) string {
+	names := make([]string, 0, len(roots))
+	for name := range roots {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// Text renders a value the way templates print it.
+func Text(v any) string { return toText(v) }
+
+// toText renders a value as text: strings as is, whole numbers without a
+// fraction, null as empty, anything else as JSON.
+func toText(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(t)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(raw)
 }

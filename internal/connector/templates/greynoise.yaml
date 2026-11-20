@@ -1,0 +1,38 @@
+id: greynoise
+title: GreyNoise
+vendor: GreyNoise
+description: 判断 IP 是互联网背景扫描噪声、常见良性服务（RIOT）还是恶意来源。
+docs: https://docs.greynoise.io/reference/get_v3-community-ip
+baseUrl: https://api.greynoise.io
+auth:
+  type: header
+  name: key
+  secret: api_key
+secrets:
+  - name: api_key
+    label: API Key
+    description: 社区版接口可不填，但有较低的调用额度。
+testAction: community_ip
+testInputs:
+  ip: 8.8.8.8
+actions:
+  - id: community_ip
+    title: IP 社区情报
+    description: GreyNoise 没见过该 IP 时返回 found=false。
+    category: enrichment
+    inputs:
+      - name: ip
+        label: IP 地址
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /v3/community/{{ inputs.ip }}
+    success: [200, 404]
+    output:
+      found: response.status == 200
+      noise: response.body.noise
+      riot: response.body.riot
+      classification: response.body.classification
+      name: response.body.name
+      lastSeen: response.body.last_seen

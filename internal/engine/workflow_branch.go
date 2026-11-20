@@ -149,7 +149,7 @@ func conditionEnv(r domain.Run) map[string]any {
 	return map[string]any{
 		"trigger": trigger,
 		"nodes":   nodes,
-		"run":     map[string]any{"id": r.ID, "input": r.Input},
+		"run":     map[string]any{"id": r.ID, "input": r.Input, "caseId": r.ExecutionContext.CaseID, "projectId": r.ExecutionContext.ProjectID},
 	}
 }
 

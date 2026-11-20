@@ -588,6 +588,15 @@ body.obs-expand-open{overflow:hidden}
 #casesView .case-form-error{color:var(--red);font-size:12px;margin:0}
 #casesView .trigger-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px 10px;align-items:center;padding:10px 12px;border:1px solid var(--line-strong);border-radius:10px;margin-bottom:8px;background:var(--panel)}
 #casesView .trigger-row .case-meta{grid-column:1}
+#casesView .conn-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:4px 10px;align-items:center;padding:10px 12px;border:1px solid var(--line-strong);border-radius:10px;margin-bottom:8px;background:var(--panel)}
+#casesView .conn-row .case-meta{grid-column:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#casesView .conn-row .conn-test{grid-column:1;font-size:12px;color:var(--muted)}
+#casesView .conn-test.ok{color:rgb(16 163 127)}
+#casesView .conn-test.bad{color:rgb(220 38 38)}
+#casesView .conn-form{display:grid;gap:10px;max-width:560px;margin-top:16px;padding:14px;border:1px dashed var(--line-strong);border-radius:10px}
+#casesView .conn-form h4{margin:0}
+#casesView .conn-form-actions{display:flex;gap:8px}
+@media (max-width:640px){#casesView .conn-row{grid-template-columns:1fr 1fr 1fr}#casesView .conn-row b,#casesView .conn-row .case-meta,#casesView .conn-row .conn-test{grid-column:1/-1}}
 #casesView .trigger-form{display:grid;gap:10px;max-width:560px;margin-top:16px;padding:14px;border:1px dashed var(--line-strong);border-radius:10px}
 #casesView .trigger-form h4{margin:0}
 #casesView .trigger-form .field{display:grid;gap:4px;font-size:12px;color:var(--muted)}

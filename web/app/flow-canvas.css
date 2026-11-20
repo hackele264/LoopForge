@@ -177,6 +177,8 @@ html[data-theme="dark"] #flowView{
 #flowView .fd-tile{--tint:var(--fd-accent);display:grid;place-items:center;width:30px;height:30px;border-radius:8px;flex:none;background:rgb(var(--tint) / .12);color:rgb(var(--tint));font:700 13px/1 inherit}
 #flowView .fd-tile.t-script{--tint:139 92 246}
 #flowView .fd-tile.t-sop{--tint:14 165 233}
+#flowView .fd-tile.t-action{--tint:234 88 12}
+#flowView .fd-req{color:rgb(220 38 38)}
 #flowView .fd-tile.t-preview{--tint:217 119 6}
 #flowView .fd-tile.t-approval{--tint:16 163 127}
 

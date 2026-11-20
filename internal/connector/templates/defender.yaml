@@ -1,0 +1,109 @@
+id: defender
+title: Microsoft Defender for Endpoint
+vendor: Microsoft
+description: 查找终端、查看风险，隔离或解除隔离终端。需要在 Entra ID 注册应用并授予 Machine.Read.All、Machine.Isolate 应用权限。
+docs: https://learn.microsoft.com/defender-endpoint/api/apis-intro
+baseUrl: https://api.securitycenter.microsoft.com
+auth:
+  type: oauth2_client_credentials
+  tokenUrl: https://login.microsoftonline.com/{{ params.tenant_id }}/oauth2/v2.0/token
+  scope: https://api.securitycenter.microsoft.com/.default
+  clientId: client_id
+  clientSecret: client_secret
+params:
+  - name: tenant_id
+    label: 租户 ID
+    required: true
+secrets:
+  - name: client_id
+    label: 应用（客户端）ID
+    required: true
+  - name: client_secret
+    label: 客户端密钥
+    required: true
+testAction: find_machine
+testInputs:
+  hostname: loopforge-connection-test
+actions:
+  - id: find_machine
+    title: 按主机名查找终端
+    category: enrichment
+    inputs:
+      - name: hostname
+        label: 主机名（computerDnsName）
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/machines
+      query:
+        $filter: "computerDnsName eq '{{ inputs.hostname }}'"
+    output:
+      count: len(response.body.value)
+      machineId: response.body.value[0].id
+      riskScore: response.body.value[0].riskScore
+      healthStatus: response.body.value[0].healthStatus
+      lastIpAddress: response.body.value[0].lastIpAddress
+  - id: get_machine
+    title: 终端详情
+    category: enrichment
+    inputs:
+      - name: machine_id
+        label: 终端 ID
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/machines/{{ inputs.machine_id }}
+    output:
+      computerDnsName: response.body.computerDnsName
+      riskScore: response.body.riskScore
+      exposureLevel: response.body.exposureLevel
+      healthStatus: response.body.healthStatus
+      lastIpAddress: response.body.lastIpAddress
+  - id: isolate
+    title: 隔离终端
+    category: response
+    inputs:
+      - name: machine_id
+        label: 终端 ID
+        type: string
+        required: true
+      - name: comment
+        label: 说明
+        type: string
+        required: true
+      - name: isolation_type
+        label: 隔离方式
+        type: string
+        default: Full
+        enum: [Full, Selective]
+    request:
+      method: POST
+      path: /api/machines/{{ inputs.machine_id }}/isolate
+      body:
+        Comment: "{{ inputs.comment }}"
+        IsolationType: "{{ inputs.isolation_type }}"
+    output:
+      actionId: response.body.id
+      actionStatus: response.body.status
+  - id: unisolate
+    title: 解除隔离
+    category: response
+    inputs:
+      - name: machine_id
+        label: 终端 ID
+        type: string
+        required: true
+      - name: comment
+        label: 说明
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /api/machines/{{ inputs.machine_id }}/unisolate
+      body:
+        Comment: "{{ inputs.comment }}"
+    output:
+      actionId: response.body.id
+      actionStatus: response.body.status

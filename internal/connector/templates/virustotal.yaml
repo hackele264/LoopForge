@@ -1,0 +1,87 @@
+id: virustotal
+title: VirusTotal
+vendor: VirusTotal
+description: 查询 IP、域名、URL 和文件哈希在 VirusTotal 上的检测结果与信誉。
+docs: https://docs.virustotal.com/reference/overview
+baseUrl: https://www.virustotal.com
+auth:
+  type: header
+  name: x-apikey
+  secret: api_key
+secrets:
+  - name: api_key
+    label: API Key
+    required: true
+testAction: ip_report
+testInputs:
+  ip: 8.8.8.8
+actions:
+  - id: ip_report
+    title: IP 信誉
+    category: enrichment
+    inputs:
+      - name: ip
+        label: IP 地址
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/v3/ip_addresses/{{ inputs.ip }}
+    output:
+      malicious: response.body.data.attributes.last_analysis_stats.malicious
+      suspicious: response.body.data.attributes.last_analysis_stats.suspicious
+      reputation: response.body.data.attributes.reputation
+      country: response.body.data.attributes.country
+      asOwner: response.body.data.attributes.as_owner
+  - id: domain_report
+    title: 域名信誉
+    category: enrichment
+    inputs:
+      - name: domain
+        label: 域名
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/v3/domains/{{ inputs.domain }}
+    output:
+      malicious: response.body.data.attributes.last_analysis_stats.malicious
+      suspicious: response.body.data.attributes.last_analysis_stats.suspicious
+      reputation: response.body.data.attributes.reputation
+      categories: response.body.data.attributes.categories
+  - id: url_report
+    title: URL 检测结果
+    description: 查询 VirusTotal 已有的 URL 分析；从未提交过的 URL 返回 found=false。
+    category: enrichment
+    inputs:
+      - name: url
+        label: URL
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/v3/urls/{{ base64url(inputs.url) }}
+    success: [200, 404]
+    output:
+      found: response.status == 200
+      malicious: response.body.data.attributes.last_analysis_stats.malicious
+      suspicious: response.body.data.attributes.last_analysis_stats.suspicious
+      finalUrl: response.body.data.attributes.last_final_url
+  - id: file_report
+    title: 文件哈希检测结果
+    category: enrichment
+    inputs:
+      - name: hash
+        label: MD5 / SHA-1 / SHA-256
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/v3/files/{{ inputs.hash }}
+    success: [200, 404]
+    output:
+      found: response.status == 200
+      malicious: response.body.data.attributes.last_analysis_stats.malicious
+      suspicious: response.body.data.attributes.last_analysis_stats.suspicious
+      typeDescription: response.body.data.attributes.type_description
+      meaningfulName: response.body.data.attributes.meaningful_name
