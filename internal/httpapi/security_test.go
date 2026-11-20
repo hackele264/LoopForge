@@ -170,12 +170,12 @@ func TestAuditLogRecordsAndExports(t *testing.T) {
 	if e := find(func(e domain.AuditEvent) bool { return e.Action == "auth.token.create" }); e == nil || e.ActorUserID != f.owner.ID || !strings.Contains(string(e.Detail), "cases:write") {
 		t.Fatalf("token creation event = %+v", e)
 	}
-	if e := find(func(e domain.AuditEvent) bool { return e.Action == "api POST /api/cases" }); e == nil || e.TokenID == "" || e.ActorUserID != f.owner.ID || e.Outcome != domain.AuditSuccess {
+	if e := find(func(e domain.AuditEvent) bool { return e.Action == "api POST /api/cases" }); e == nil || e.TokenID == "" || e.ActorUserID != f.owner.ID || e.Outcome != domain.AuditSuccess || e.ProjectID != "sec" {
 		t.Fatalf("token write event = %+v", e)
 	}
 	if e := find(func(e domain.AuditEvent) bool {
 		return e.Action == "api GET /api/cases" && e.ActorUserID == stranger.ID
-	}); e == nil || e.Outcome != domain.AuditDenied {
+	}); e == nil || e.Outcome != domain.AuditDenied || e.ProjectID != "sec" {
 		t.Fatalf("denied read event = %+v", e)
 	}
 	if e := find(func(e domain.AuditEvent) bool {

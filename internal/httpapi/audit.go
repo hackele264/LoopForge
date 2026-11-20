@@ -29,8 +29,9 @@ type auditHandlers struct {
 
 // Context keys handlers use to add facts the middleware cannot see.
 const (
-	auditLoginKey  = "audit.login"
-	auditDetailKey = "audit.detail"
+	auditLoginKey   = "audit.login"
+	auditDetailKey  = "audit.detail"
+	auditProjectKey = "audit.project"
 )
 
 // authAuditActions names sign-in and token endpoints; their requests are
@@ -78,6 +79,9 @@ func (h *auditHandlers) middleware() gin.HandlerFunc {
 			action = "api " + c.Request.Method + " " + route
 		}
 		e := domain.AuditEvent{Action: action, Method: c.Request.Method, Path: route, Target: path, Status: status, Outcome: domain.AuditOutcome(status), ProjectID: strings.TrimSpace(c.Query("projectId"))}
+		if v, ok := c.Get(auditProjectKey); ok && e.ProjectID == "" {
+			e.ProjectID, _ = v.(string)
+		}
 		if v, ok := c.Get(auditLoginKey); ok {
 			e.ActorLogin, _ = v.(string)
 		}
@@ -257,4 +261,16 @@ func (h *auditHandlers) requireAuditReader(c *gin.Context) bool {
 	}
 	c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以查看审计日志"})
 	return false
+}
+
+// noteAuditProject tells the audit middleware which project a request
+// touched, when the project ID is not in the query (request bodies, runs,
+// cases). Permission checks call it, so the first project they check wins.
+func noteAuditProject(c *gin.Context, projectID string) {
+	if c == nil || projectID == "" {
+		return
+	}
+	if _, set := c.Get(auditProjectKey); !set {
+		c.Set(auditProjectKey, projectID)
+	}
 }

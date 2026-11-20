@@ -17,6 +17,9 @@ import (
 // Projects without an owner are shared. Requests that passed authentication
 // without a user identity (service tokens) are allowed.
 func (d deps) requireProjectWriter(c *gin.Context, projectIDs ...string) bool {
+	for _, id := range projectIDs {
+		noteAuditProject(c, id)
+	}
 	if !authRequired() {
 		return true
 	}
@@ -126,6 +129,7 @@ func (d deps) runWriteGuard() gin.HandlerFunc {
 			issueProject = issue.ProjectID
 		}
 		projectID := domain.RunProjectID(run, issueProject)
+		noteAuditProject(c, projectID)
 		if c.Request.Method == http.MethodGet {
 			// Every read of a run (detail, logs, artifacts, workspace,
 			// stream) goes through here.
