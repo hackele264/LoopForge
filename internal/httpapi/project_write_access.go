@@ -20,6 +20,12 @@ func (d deps) requireProjectWriter(c *gin.Context, projectIDs ...string) bool {
 	if !authRequired() {
 		return true
 	}
+	for _, id := range projectIDs {
+		if !d.tokenAllowsProject(c.Request, id) {
+			c.JSON(403, gin.H{"error": "API Token 无权修改该项目"})
+			return false
+		}
+	}
 	user, ok := d.requestUser(c.Request, true)
 	if !ok || d.isPlatformAdmin(c.Request) {
 		return true
@@ -111,7 +117,7 @@ func (d deps) runWriteGuard() gin.HandlerFunc {
 				return
 			}
 		}
-		if run.ID == "" || c.Request.Method == http.MethodGet || !guardedRunWrites[path] {
+		if run.ID == "" {
 			c.Next()
 			return
 		}
@@ -119,7 +125,27 @@ func (d deps) runWriteGuard() gin.HandlerFunc {
 		if issue, found := d.repo.Issue(run.ExecutionContext.IssueID); found {
 			issueProject = issue.ProjectID
 		}
-		if !d.requireProjectWriter(c, domain.RunProjectID(run, issueProject)) {
+		projectID := domain.RunProjectID(run, issueProject)
+		if c.Request.Method == http.MethodGet {
+			// Every read of a run (detail, logs, artifacts, workspace,
+			// stream) goes through here.
+			if !run.IsPersonalWorkspace() && !d.projectReadable(c.Request, projectID) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "只有项目成员可以查看该运行"})
+				return
+			}
+			c.Next()
+			return
+		}
+		if !guardedRunWrites[path] {
+			// Ungated run writes still respect a project-limited token.
+			if !d.tokenAllowsProject(c.Request, projectID) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "API Token 无权访问该运行"})
+				return
+			}
+			c.Next()
+			return
+		}
+		if !d.requireProjectWriter(c, projectID) {
 			c.Abort()
 			return
 		}

@@ -98,6 +98,7 @@ func (h *authHandlers) authPassword(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid login request"})
 		return
 	}
+	c.Set(auditLoginKey, input.Login)
 	u, found := h.repo.UserByLoginName(input.Login)
 	valid := h.repo.CheckLocalPassword(u.ID, input.Password)
 	if !found || !valid {

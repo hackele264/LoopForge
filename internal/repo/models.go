@@ -87,6 +87,9 @@ type apiTokenRow struct {
 	ExpiresAt  *time.Time `gorm:"column:expires_at"`
 	Created    time.Time  `gorm:"column:created_at"`
 	RevokedAt  *time.Time `gorm:"column:revoked_at"`
+	// Scopes and ProjectIDs are comma-separated; empty means unrestricted.
+	Scopes     string `gorm:"column:scopes;size:255"`
+	ProjectIDs string `gorm:"column:project_ids;type:text"`
 }
 
 func (apiTokenRow) TableName() string { return "api_tokens" }
@@ -755,7 +758,7 @@ func allModels() []any {
 		insightSourceRow{}, insightExecutionRow{},
 		webhookRow{}, webhookDedupRow{}, webhookDeliveryRow{},
 		alertRow{}, caseRow{}, caseCounterRow{}, caseIOCRow{}, caseEventRow{}, caseTriggerRow{},
-		connectionRow{},
+		connectionRow{}, auditEventRow{},
 		projectRow{}, projectMemberRow{}, repositoryRow{}, businessDomainRow{}, businessDomainAssignmentRow{},
 		agentRow{}, ruleRow{}, skillRow{}, skillFileRow{}, mcpServerRow{}, mcpFileRow{}, executorRow{},
 		dockerfileRow{}, environmentRow{}, sandboxRow{},

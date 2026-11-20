@@ -1,0 +1,27 @@
+# Hardened overlay for SOAR deployments (needs Docker Compose 2.24.4+ for
+# !override / !reset):
+#
+#   COMPOSE_FILE=compose.yaml:compose.hardened.yaml docker compose --profile platform up -d
+#
+# - The platform runs as the API role without the Docker socket: it serves
+#   the UI and API and starts nothing on this host. Runs execute on separate
+#   workers or execution machines (see docs/deployment.md, "Workers and
+#   runners"); until one is connected, runs wait.
+# - Sign-up is off; create accounts with loopforge-account.
+# - Project data is readable by project members only, every approval needs a
+#   named person, and approvals that release response actions need an
+#   interactive session.
+# - Set AGENTFLOW_SECURE_COOKIES=true in .env once the site is served over
+#   HTTPS.
+services:
+  platform:
+    environment:
+      AGENTFLOW_ROLE: api
+      AGENTFLOW_LOCAL_SANDBOX: !reset null
+      AGENTFLOW_ALLOW_SIGNUP: ${AGENTFLOW_ALLOW_SIGNUP:-false}
+      AGENTFLOW_PROJECT_READ_ISOLATION: "true"
+      AGENTFLOW_APPROVAL_REQUIRE_NAMED: "true"
+      AGENTFLOW_AUDIT_RETENTION_DAYS: ${AGENTFLOW_AUDIT_RETENTION_DAYS:-365}
+    volumes: !override
+      - platform-data:/data
+      - ${LOOPFORGE_DATA_DIR}:${LOOPFORGE_DATA_DIR}

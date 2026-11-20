@@ -229,6 +229,9 @@ type Actor struct {
 	UserID int64  `json:"userId,omitempty"`
 	Kind   string `json:"kind,omitempty"`
 	Login  string `json:"login,omitempty"`
+	// TokenID is set when the actor authenticated with an API token rather
+	// than an interactive session.
+	TokenID string `json:"tokenId,omitempty"`
 }
 
 // Named reports whether the actor is a specific platform user.

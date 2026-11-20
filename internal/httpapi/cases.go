@@ -27,6 +27,10 @@ const maxAlertsInTrigger = 20
 // administrators and projects without an owner. Security data is not
 // readable instance-wide like the rest of the catalog.
 func (h *casesHandlers) projectReader(c *gin.Context, projectID string) bool {
+	if authRequired() && !h.tokenAllowsProject(c.Request, projectID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "API Token 无权访问该项目"})
+		return false
+	}
 	if !authRequired() || h.isPlatformAdmin(c.Request) {
 		return true
 	}

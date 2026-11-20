@@ -85,6 +85,7 @@ func (e *Engine) executeActionNode(ctx context.Context, runID string, wf domain.
 	}
 	if !c.Builtin {
 		e.recordCaseAction(run, node, c, a, conn, result, execErr)
+		e.auditConnectorAction(run, node, c, a, conn, execErr)
 	}
 	if execErr != nil {
 		e.observe(runID, node.ID, domain.TelemetryEvent{Category: "connector", Name: "connector.action.failed", Phase: "finish", Level: "error", Message: label + "：" + execErr.Error(), Attributes: attrs})
@@ -173,5 +174,30 @@ func (e *Engine) recordCaseDecision(run domain.Run, nodeID, verb, note string, a
 	ev := domain.CaseEvent{Type: domain.CaseEventApproval, Message: message, ActorUserID: actor.UserID, ActorKind: actor.Kind, Data: domain.RawJSON(raw), CreatedAt: time.Now().UTC()}
 	if err := e.repo.AppendCaseEvents(caseID, ev); err != nil {
 		e.observe(run.ID, nodeID, domain.TelemetryEvent{Category: "orchestration", Name: "case.approval.record_failed", Level: "warn", Message: err.Error()})
+	}
+}
+
+// auditConnectorAction records a call that used a connection's credentials
+// in the platform audit log.
+func (e *Engine) auditConnectorAction(run domain.Run, node domain.WorkflowNode, c *connector.Connector, a *connector.Action, conn *domain.Connection, execErr error) {
+	detail := map[string]any{"runId": run.ID, "nodeId": node.ID, "connector": c.ID, "action": a.ID, "category": a.Category, "caseId": run.ExecutionContext.CaseID}
+	ev := domain.AuditEvent{Action: "connector.action", ActorKind: domain.ActorSystem, ActorUserID: run.ExecutionContext.ResponsibleUserID, ProjectID: run.ExecutionContext.ProjectID, Target: connector.Key(c.ID, a.ID), Outcome: domain.AuditSuccess}
+	if conn != nil {
+		detail["connectionId"] = conn.ID
+		detail["connection"] = conn.Name
+	}
+	if execErr != nil {
+		ev.Outcome = domain.AuditFailure
+		msg := execErr.Error()
+		if len([]rune(msg)) > 300 {
+			msg = string([]rune(msg)[:300]) + "…"
+		}
+		detail["error"] = msg
+	}
+	if raw, err := json.Marshal(detail); err == nil {
+		ev.Detail = domain.RawJSON(raw)
+	}
+	if err := e.repo.AppendAudit(ev); err != nil {
+		e.observe(run.ID, node.ID, domain.TelemetryEvent{Category: "connector", Name: "audit.record_failed", Level: "warn", Message: err.Error()})
 	}
 }

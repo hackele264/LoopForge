@@ -211,3 +211,38 @@ func TestValidateRejectsUngatedResponseAction(t *testing.T) {
 		t.Fatalf("validate = %v", err)
 	}
 }
+
+// TestResponseApprovalNeedsInteractivePerson: an approval whose success path
+// reaches a response action refuses service callers and API tokens.
+func TestResponseApprovalNeedsInteractivePerson(t *testing.T) {
+	t.Parallel()
+	e, s := newBranchEngine(t)
+	wf := domain.WorkflowDefinition{ID: "contain-approval", Name: "contain", SandboxProfileID: "local",
+		Nodes: []domain.WorkflowNode{
+			{ID: "ok", Name: "确认隔离", Type: "approval", MaxAttempts: 1},
+			{ID: "contain", Name: "contain", Type: connector.NodeType, MaxAttempts: 1, Action: &domain.NodeAction{Connector: "crowdstrike", Action: "contain", ConnectionID: "missing", Inputs: map[string]string{"device_id": "d"}}},
+		},
+		Edges: []domain.WorkflowEdge{{ID: "1", Source: "ok", Target: "contain"}}}
+	if err := s.PutWorkflow(wf); err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.StartWithTrigger(wf.ID, "", json.RawMessage(`{}`), nil, domain.TelemetryContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, s, r.ID, "waiting")
+	for name, actor := range map[string]domain.Actor{
+		"service": {Kind: domain.ActorService},
+		"token":   {UserID: 5, Kind: domain.ActorUser, Login: "bot", TokenID: "tok-1"},
+	} {
+		if err := e.ApproveAs(r.ID, "ok", "", actor); err == nil {
+			t.Fatalf("%s approval of a response gate was accepted", name)
+		}
+	}
+	if err := e.ApproveAs(r.ID, "ok", "", domain.Actor{UserID: 5, Kind: domain.ActorUser, Login: "analyst"}); err != nil {
+		t.Fatalf("interactive approval: %v", err)
+	}
+	// The containment then fails on the missing connection, which is fine:
+	// the point is that the gate opened only for a person.
+	waitFor(t, s, r.ID, "failed")
+}

@@ -175,6 +175,9 @@ func (e *Engine) ApproveAs(runID, nodeID, humanContext string, actor domain.Acto
 	if err := e.authorizeDecision(r, nodeID, actor); err != nil {
 		return err
 	}
+	if err := e.authorizeResponseRelease(r, nodeID, actor); err != nil {
+		return err
+	}
 	n.Status = "succeeded"
 	n.FinishedAt = time.Now().UTC()
 	recordDecision(n, actor)

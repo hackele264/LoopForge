@@ -87,10 +87,24 @@ func (h *runsHandlers) runs(c *gin.Context) {
 			return
 		}
 		user, authenticated := h.requestUser(r, true)
+		readable := h.projectReadFilter(r)
+		issueProjects := map[string]string{}
 		visible := runs[:0]
 		for _, run := range runs {
-			if run.IsPersonalWorkspace() && (!authenticated || user.ID <= 0 || user.ID != run.ExecutionContext.ResponsibleUserID) {
-				continue
+			if run.IsPersonalWorkspace() {
+				if !authenticated || user.ID <= 0 || user.ID != run.ExecutionContext.ResponsibleUserID {
+					continue
+				}
+			} else {
+				issueID := run.ExecutionContext.IssueID
+				if _, seen := issueProjects[issueID]; !seen && issueID != "" && run.ExecutionContext.ProjectID == "" {
+					if issue, found := h.repo.Issue(issueID); found {
+						issueProjects[issueID] = issue.ProjectID
+					}
+				}
+				if !readable(domain.RunProjectID(run, issueProjects[issueID])) {
+					continue
+				}
 			}
 			visible = append(visible, run)
 		}

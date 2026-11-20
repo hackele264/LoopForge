@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"agentflow/internal/apperr"
+	"agentflow/internal/connector"
 	"agentflow/internal/domain"
 )
 
@@ -75,4 +76,62 @@ func decisionByline(actor domain.Actor) string {
 		return "Decided by a " + actor.Kind + " caller at " + time.Now().UTC().Format(time.RFC3339) + "."
 	}
 	return ""
+}
+
+// tokenResponseApprovals lets API tokens approve gates that release
+// response actions. Off by default: isolating a host or disabling an account
+// needs a person signed in to the platform, not an automation credential.
+func tokenResponseApprovals() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AGENTFLOW_RESPONSE_APPROVAL_ALLOW_TOKEN"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// authorizeResponseRelease checks approvals whose success path reaches a
+// response action: the approver must be a named user in an interactive
+// session.
+func (e *Engine) authorizeResponseRelease(r domain.Run, nodeID string, actor domain.Actor) error {
+	wf := workflowForRun(e.repo, r)
+	if !releasesResponseAction(wf, nodeID) {
+		return nil
+	}
+	if !actor.Named() {
+		return apperr.New(apperr.Forbidden, "该审批之后有响应处置动作，只接受具名用户审批")
+	}
+	if actor.TokenID != "" && !tokenResponseApprovals() {
+		return apperr.New(apperr.Forbidden, "该审批之后有响应处置动作，需要登录平台审批，不接受 API Token")
+	}
+	return nil
+}
+
+// releasesResponseAction reports whether a response action is reachable
+// from nodeID through success edges.
+func releasesResponseAction(wf domain.WorkflowDefinition, nodeID string) bool {
+	byID := map[string]domain.WorkflowNode{}
+	for _, n := range wf.Nodes {
+		byID[n.ID] = n
+	}
+	seen := map[string]bool{nodeID: true}
+	stack := []string{nodeID}
+	cat := connector.Default()
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, e := range wf.Edges {
+			if e.Source != id || domain.EdgeWhen(e) != domain.EdgeWhenSuccess || seen[e.Target] {
+				continue
+			}
+			seen[e.Target] = true
+			n := byID[e.Target]
+			if n.Type == connector.NodeType && n.Action != nil {
+				if _, a, ok := cat.Action(n.Action.Connector, n.Action.Action); ok && a.Category == connector.CategoryResponse {
+					return true
+				}
+			}
+			stack = append(stack, e.Target)
+		}
+	}
+	return false
 }
