@@ -1,0 +1,296 @@
+# Written for LoopForge from Okta's public API documentation.
+id: okta
+title: Okta
+vendor: Okta
+description: 通过 Okta 管理 API 查询用户、用户组和 MFA 因子，挂起/解除挂起/停用账号、清除会话、让密码过期或重置密码、调整组成员、重置 MFA。服务地址填组织地址，例如 https://<org>.okta.com。API Token 在 Okta 管理后台 Security → API → Tokens 创建，权限取决于创建它的管理员角色；处置动作需要能管理用户的管理员。重置密码始终由 Okta 把链接发到用户邮箱，节点输出中不含任何链接或令牌。
+docs: https://developer.okta.com/docs/api/openapi/okta-management/guides/overview/
+auth:
+  type: header
+  name: Authorization
+  prefix: "SSWS "
+  secret: api_token
+secrets:
+  - name: api_token
+    label: API Token
+    description: Okta API Token（Security → API → Tokens），请求头为 Authorization：SSWS <token>
+    required: true
+testAction: list_users
+testInputs:
+  limit: 1
+actions:
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/user/other/getuser
+  - id: get_user
+    title: 查询用户
+    description: 按用户 ID 或登录名（login）查询用户状态和资料。用户不存在时 found 为 false。
+    category: enrichment
+    inputs:
+      - name: user
+        label: 用户 ID 或登录名
+        type: string
+        required: true
+        description: 例如 00u1abcd... 或 alice@example.com
+    request:
+      method: GET
+      path: /api/v1/users/{{ inputs.user }}
+    success: [200, 404]
+    output:
+      found: response.status == 200
+      id: response.body.id
+      userStatus: response.body.status
+      login: response.body.profile.login
+      email: response.body.profile.email
+      firstName: response.body.profile.firstName
+      lastName: response.body.profile.lastName
+      displayName: response.body.profile.displayName
+      created: response.body.created
+      lastLogin: response.body.lastLogin
+      passwordChanged: response.body.passwordChanged
+      statusChanged: response.body.statusChanged
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/user/other/listusers
+  - id: find_user_by_email
+    title: 按邮箱查找用户
+    description: 用 filter=profile.email eq "<邮箱>" 精确匹配主邮箱（区分大小写，包含已停用用户）。未找到时 found 为 false。
+    category: enrichment
+    inputs:
+      - name: email
+        label: 邮箱
+        type: string
+        required: true
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 10
+    request:
+      method: GET
+      path: /api/v1/users
+      query:
+        filter: 'profile.email eq "{{ inputs.email }}"'
+        limit: "{{ inputs.limit }}"
+    output:
+      found: len(response.body) > 0
+      id: response.body[0].id
+      login: response.body[0].profile.login
+      userStatus: response.body[0].status
+      items: response.body
+      count: len(response.body)
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/user/other/listusers
+  - id: list_users
+    title: 列出用户
+    description: 列出组织中的用户（第一页）。
+    category: enrichment
+    inputs:
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 20
+        description: 每页条数，Okta 默认 200
+    request:
+      method: GET
+      path: /api/v1/users
+      query:
+        limit: "{{ inputs.limit }}"
+    output:
+      items: response.body
+      count: len(response.body)
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/userresources/other/listusergroups
+  - id: list_user_groups
+    title: 列出用户所属组
+    description: 列出用户所在的用户组（第一页，最多 200 个）。
+    category: enrichment
+    inputs:
+      - name: user
+        label: 用户 ID 或登录名
+        type: string
+        required: true
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 200
+    request:
+      method: GET
+      path: /api/v1/users/{{ inputs.user }}/groups
+      query:
+        limit: "{{ inputs.limit }}"
+    success: [200, 404]
+    output:
+      found: response.status == 200
+      items: response.body
+      count: len(response.body)
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/userfactor/other/listfactors
+  - id: list_user_factors
+    title: 列出用户 MFA 因子
+    description: 列出用户已注册的 MFA 因子（类型、提供方、状态）。
+    category: enrichment
+    inputs:
+      - name: user_id
+        label: 用户 ID
+        type: string
+        required: true
+        description: Okta 用户 ID（00u 开头）
+    request:
+      method: GET
+      path: /api/v1/users/{{ inputs.user_id }}/factors
+    success: [200, 404]
+    output:
+      found: response.status == 200
+      items: response.body
+      count: len(response.body)
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/userlifecycle/other/suspenduser
+  - id: suspend_user
+    title: 挂起账号
+    description: 将 ACTIVE 用户挂起（SUSPENDED），用户无法登录，可解除挂起恢复。
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或登录名
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /api/v1/users/{{ inputs.user }}/lifecycle/suspend
+    output:
+      done: response.status == 200
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/userlifecycle/other/unsuspenduser
+  - id: unsuspend_user
+    title: 解除挂起
+    description: 将 SUSPENDED 用户恢复为 ACTIVE。
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或登录名
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /api/v1/users/{{ inputs.user }}/lifecycle/unsuspend
+    output:
+      done: response.status == 200
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/userlifecycle/other/deactivateuser
+  - id: deactivate_user
+    title: 停用账号
+    description: 停用用户（DEPROVISIONED），会解除应用分配，不可直接撤销，只能重新激活。
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或登录名
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /api/v1/users/{{ inputs.user }}/lifecycle/deactivate
+    output:
+      done: response.status == 200
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/usersessions/other/revokeusersessions
+  - id: revoke_sessions
+    title: 清除登录会话
+    description: 清除该用户所有 Okta 会话，可选同时吊销 OAuth/OIDC 令牌。不会清除应用自身建立的会话。
+    category: response
+    inputs:
+      - name: user_id
+        label: 用户 ID
+        type: string
+        required: true
+        description: Okta 用户 ID（00u 开头）
+      - name: oauth_tokens
+        label: 同时吊销 OAuth 令牌
+        type: boolean
+        default: true
+        description: 吊销已签发的 OpenID Connect 与 OAuth 刷新令牌和访问令牌
+    request:
+      method: DELETE
+      path: /api/v1/users/{{ inputs.user_id }}/sessions
+      query:
+        oauthTokens: "{{ inputs.oauth_tokens }}"
+    output:
+      done: response.status == 204
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/usercred/other/expirepassword
+  - id: expire_password
+    title: 让密码过期
+    description: 将用户密码标记为过期（PASSWORD_EXPIRED），用户下次登录时必须修改密码。不生成临时密码。
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或登录名
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /api/v1/users/{{ inputs.user }}/lifecycle/expire_password
+    output:
+      done: response.status == 200
+      userStatus: response.body.status
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/usercred/other/resetpassword
+  - id: reset_password
+    title: 重置密码
+    description: 将用户转为 RECOVERY 状态，并由 Okta 把一次性重置链接发送到用户邮箱（始终发邮件，链接不会返回给 LoopForge）。可选同时清除会话。
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或登录名
+        type: string
+        required: true
+      - name: revoke_sessions
+        label: 同时清除会话
+        type: boolean
+        default: true
+    request:
+      method: POST
+      path: /api/v1/users/{{ inputs.user }}/lifecycle/reset_password
+      query:
+        sendEmail: "true"
+        revokeSessions: "{{ inputs.revoke_sessions }}"
+    output:
+      done: response.status == 200
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/group/other/assignusertogroup
+  - id: add_user_to_group
+    title: 加入用户组
+    category: response
+    inputs:
+      - name: group_id
+        label: 组 ID
+        type: string
+        required: true
+        description: Okta 组 ID（00g 开头）
+      - name: user_id
+        label: 用户 ID
+        type: string
+        required: true
+    request:
+      method: PUT
+      path: /api/v1/groups/{{ inputs.group_id }}/users/{{ inputs.user_id }}
+    output:
+      done: response.status == 204
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/group/other/unassignuserfromgroup
+  - id: remove_user_from_group
+    title: 移出用户组
+    category: response
+    inputs:
+      - name: group_id
+        label: 组 ID
+        type: string
+        required: true
+        description: Okta 组 ID（00g 开头）
+      - name: user_id
+        label: 用户 ID
+        type: string
+        required: true
+    request:
+      method: DELETE
+      path: /api/v1/groups/{{ inputs.group_id }}/users/{{ inputs.user_id }}
+    output:
+      done: response.status == 204
+  # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tags/userlifecycle/other/resetfactors
+  - id: reset_factors
+    title: 重置全部 MFA 因子
+    description: 重置用户已注册的全部 MFA 因子，用户下次登录需重新注册。
+    category: response
+    inputs:
+      - name: user
+        label: 用户 ID 或登录名
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /api/v1/users/{{ inputs.user }}/lifecycle/reset_factors
+    output:
+      done: response.status == 200

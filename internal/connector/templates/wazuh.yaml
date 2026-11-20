@@ -1,0 +1,103 @@
+# Written for LoopForge from Wazuh's public API documentation.
+id: wazuh
+title: Wazuh（索引器）
+vendor: Wazuh
+description: 通过 Wazuh 索引器 API（端口 9200，基本认证）只读搜索 Wazuh 告警和漏洞检测结果，可作为拉取式告警源。服务地址填索引器地址，例如 https://wazuh-indexer.example.com:9200；默认自签证书在连接里填证书 SHA-256 指纹。建议使用只对 wazuh-alerts-* 和 wazuh-states-vulnerabilities-* 有读权限的账号。Wazuh 服务端 API 需要先登录换取 JWT，本连接器不使用它。
+docs: https://documentation.wazuh.com/current/user-manual/indexer-api/index.html
+auth:
+  type: basic
+  username: username
+  password: password
+secrets:
+  - name: username
+    label: 索引器用户名
+    required: true
+  - name: password
+    label: 索引器密码
+    required: true
+testAction: search_alerts
+testInputs:
+  size: 1
+actions:
+  # Docs: https://documentation.wazuh.com/current/user-manual/indexer-api/getting-started.html
+  - id: search_alerts
+    title: 搜索告警
+    description: 在 wazuh-alerts-* 中按时间范围、最低规则级别和查询语句搜索告警，按时间倒序返回。
+    category: enrichment
+    inputs:
+      - name: from
+        label: 起始时间
+        type: string
+        default: now-1h
+        description: ISO 8601 时间或日期数学表达式，例如 now-15m
+      - name: to
+        label: 结束时间
+        type: string
+        default: now
+      - name: min_level
+        label: 最低规则级别
+        type: number
+        default: 0
+        description: rule.level 大于等于该值（0–15）
+      - name: query
+        label: 查询语句
+        type: string
+        default: "*"
+        description: Lucene 查询语法，例如 agent.name:"web-01" 或 rule.groups:authentication_failed；* 表示不限
+      - name: size
+        label: 最多返回条数
+        type: number
+        default: 100
+    request:
+      method: POST
+      path: /wazuh-alerts-*/_search
+      body:
+        size: "{{ inputs.size }}"
+        sort:
+          - "@timestamp":
+              order: desc
+        query:
+          bool:
+            filter:
+              - range:
+                  "@timestamp":
+                    gte: "{{ inputs.from }}"
+                    lte: "{{ inputs.to }}"
+              - range:
+                  rule.level:
+                    gte: "{{ inputs.min_level }}"
+              - query_string:
+                  query: "{{ inputs.query }}"
+    timeoutSeconds: 60
+    output:
+      items: response.body.hits.hits
+      count: len(response.body.hits.hits)
+      total: response.body.hits.total.value
+  # Docs: https://documentation.wazuh.com/current/user-manual/indexer-api/use-case.html
+  - id: search_vulnerabilities
+    title: 搜索漏洞
+    description: 在 wazuh-states-vulnerabilities-* 中搜索漏洞检测结果，例如某个 CVE 影响了哪些终端，或某个终端有哪些高危漏洞。
+    category: enrichment
+    inputs:
+      - name: query
+        label: 查询语句
+        type: string
+        required: true
+        description: Lucene 查询语法，例如 vulnerability.id:"CVE-2020-14393" 或 agent.name:"web-01" AND vulnerability.severity:Critical
+      - name: size
+        label: 最多返回条数
+        type: number
+        default: 100
+    request:
+      method: POST
+      path: /wazuh-states-vulnerabilities-*/_search
+      body:
+        size: "{{ inputs.size }}"
+        query:
+          query_string:
+            query: "{{ inputs.query }}"
+    timeoutSeconds: 60
+    output:
+      items: response.body.hits.hits
+      count: len(response.body.hits.hits)
+      total: response.body.hits.total.value

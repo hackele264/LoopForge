@@ -1,0 +1,349 @@
+# Written for LoopForge from Elastic's public API documentation.
+id: elastic_security
+title: Elastic Security
+vendor: Elastic
+description: 通过 Kibana API 查询和处理检测告警、启停检测规则、查询 Elastic Defend 终端并隔离或释放主机。服务地址填 Kibana 地址，例如 https://kibana.example.com:5601；自签证书在连接里填证书 SHA-256 指纹。API Key 在 Kibana「Stack Management → API keys」创建，填编码后的值。
+docs: https://www.elastic.co/docs/api/doc/kibana
+auth:
+  type: header
+  name: Authorization
+  prefix: "ApiKey "
+  secret: api_key
+params:
+  - name: space_id
+    label: Kibana 空间 ID
+    description: 空间的 URL 标识，默认空间为 default
+    default: default
+secrets:
+  - name: api_key
+    label: API Key
+    description: Base64 编码的 API Key（encoded 字段）
+    required: true
+testAction: list_rules
+testInputs:
+  per_page: 1
+actions:
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-searchalerts
+  - id: search_alerts
+    title: 搜索检测告警
+    description: 用 Elasticsearch 查询 DSL 搜索检测告警，可作为拉取式告警源。返回的 _id 可用于设置状态和标签。
+    category: enrichment
+    inputs:
+      - name: query
+        label: 查询（DSL）
+        type: object
+        required: true
+        description: 'Elasticsearch query 对象，例如 {"bool": {"filter": [{"term": {"kibana.alert.workflow_status": "open"}}, {"range": {"@timestamp": {"gte": "now-15m"}}}]}}'
+      - name: size
+        label: 最多返回条数
+        type: number
+        default: 100
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/detection_engine/signals/search
+      headers:
+        kbn-xsrf: "true"
+      body:
+        query: "{{ inputs.query }}"
+        size: "{{ inputs.size }}"
+        sort:
+          - "@timestamp": desc
+    output:
+      items: response.body.hits.hits
+      count: len(response.body.hits.hits)
+      total: response.body.hits.total.value
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-setalertsstatus
+  - id: set_alert_status
+    title: 设置告警状态
+    description: 把告警设为 open、acknowledged 或 in-progress。关闭告警请用「关闭告警」。
+    category: utility
+    inputs:
+      - name: alert_ids
+        label: 告警 ID 列表
+        type: list
+        required: true
+        description: 告警文档的 _id 或 kibana.alert.uuid
+      - name: alert_status
+        label: 状态
+        type: string
+        required: true
+        enum: [open, acknowledged, in-progress]
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/detection_engine/signals/status
+      headers:
+        kbn-xsrf: "true"
+      body:
+        signal_ids: "{{ inputs.alert_ids }}"
+        status: "{{ inputs.alert_status }}"
+    output:
+      updated: response.body.updated
+      total: response.body.total
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-setalertsstatus
+  - id: close_alerts
+    title: 关闭告警
+    description: 以指定原因关闭告警，关闭后不再出现在待处理列表。
+    category: response
+    inputs:
+      - name: alert_ids
+        label: 告警 ID 列表
+        type: list
+        required: true
+        description: 告警文档的 _id 或 kibana.alert.uuid
+      - name: reason
+        label: 关闭原因
+        type: string
+        required: true
+        enum: [false_positive, duplicate, true_positive, benign_positive, automated_closure, other]
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/detection_engine/signals/status
+      headers:
+        kbn-xsrf: "true"
+      body:
+        signal_ids: "{{ inputs.alert_ids }}"
+        status: closed
+        reason: "{{ inputs.reason }}"
+    output:
+      updated: response.body.updated
+      total: response.body.total
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-setalerttags
+  - id: add_alert_tags
+    title: 添加告警标签
+    category: utility
+    inputs:
+      - name: alert_ids
+        label: 告警 ID 列表
+        type: list
+        required: true
+      - name: tags
+        label: 标签
+        type: list
+        required: true
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/detection_engine/signals/tags
+      headers:
+        kbn-xsrf: "true"
+      body:
+        ids: "{{ inputs.alert_ids }}"
+        tags:
+          tags_to_add: "{{ inputs.tags }}"
+          tags_to_remove: []
+    output:
+      updated: response.body.updated
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-setalerttags
+  - id: remove_alert_tags
+    title: 移除告警标签
+    category: utility
+    inputs:
+      - name: alert_ids
+        label: 告警 ID 列表
+        type: list
+        required: true
+      - name: tags
+        label: 标签
+        type: list
+        required: true
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/detection_engine/signals/tags
+      headers:
+        kbn-xsrf: "true"
+      body:
+        ids: "{{ inputs.alert_ids }}"
+        tags:
+          tags_to_add: []
+          tags_to_remove: "{{ inputs.tags }}"
+    output:
+      updated: response.body.updated
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-findrules
+  - id: list_rules
+    title: 查询检测规则
+    category: enrichment
+    inputs:
+      - name: filter
+        label: 过滤条件
+        type: string
+        description: 例如 alert.attributes.name:"Malware*" 或 alert.attributes.enabled:true
+      - name: sort_field
+        label: 排序字段
+        type: string
+        default: name
+        enum: [name, enabled, severity, risk_score, created_at, updated_at]
+      - name: sort_order
+        label: 排序方向
+        type: string
+        default: asc
+        enum: [asc, desc]
+      - name: page
+        label: 页码
+        type: number
+        default: 1
+      - name: per_page
+        label: 每页条数
+        type: number
+        default: 20
+    request:
+      method: GET
+      path: /s/{{ params.space_id }}/api/detection_engine/rules/_find
+      query:
+        filter: "{{ inputs.filter }}"
+        sort_field: "{{ inputs.sort_field }}"
+        sort_order: "{{ inputs.sort_order }}"
+        page: "{{ inputs.page }}"
+        per_page: "{{ inputs.per_page }}"
+    output:
+      items: response.body.data
+      count: len(response.body.data)
+      total: response.body.total
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-performrulesbulkaction
+  - id: enable_rules
+    title: 启用检测规则
+    category: response
+    inputs:
+      - name: rule_ids
+        label: 规则 ID 列表
+        type: list
+        required: true
+        description: 规则的 id（不是 rule_id）
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/detection_engine/rules/_bulk_action
+      headers:
+        kbn-xsrf: "true"
+      body:
+        action: enable
+        ids: "{{ inputs.rule_ids }}"
+    output:
+      success: response.body.success
+      succeeded: response.body.attributes.summary.succeeded
+      failed: response.body.attributes.summary.failed
+      errors: response.body.attributes.errors
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-performrulesbulkaction
+  - id: disable_rules
+    title: 停用检测规则
+    description: 停用后规则不再产生告警。
+    category: response
+    inputs:
+      - name: rule_ids
+        label: 规则 ID 列表
+        type: list
+        required: true
+        description: 规则的 id（不是 rule_id）
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/detection_engine/rules/_bulk_action
+      headers:
+        kbn-xsrf: "true"
+      body:
+        action: disable
+        ids: "{{ inputs.rule_ids }}"
+    output:
+      success: response.body.success
+      succeeded: response.body.attributes.summary.succeeded
+      failed: response.body.attributes.summary.failed
+      errors: response.body.attributes.errors
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-getendpointmetadatalist
+  - id: list_endpoints
+    title: 查询终端
+    description: 查询 Elastic Defend 终端元数据。返回项的 metadata.agent.id 即隔离、释放所用的终端 ID。
+    category: enrichment
+    inputs:
+      - name: kuery
+        label: KQL 过滤条件
+        type: string
+        description: KQL 字符串，字段名可参考本动作返回的终端元数据
+      - name: host_status
+        label: 主机状态
+        type: string
+        enum: [healthy, offline, updating, inactive, unenrolled]
+      - name: page_size
+        label: 每页条数
+        type: number
+        default: 10
+        description: 最大 100
+    request:
+      method: GET
+      path: /s/{{ params.space_id }}/api/endpoint/metadata
+      query:
+        kuery: "{{ inputs.kuery }}"
+        hostStatuses: "{{ inputs.host_status }}"
+        pageSize: "{{ inputs.page_size }}"
+    output:
+      items: response.body.data
+      count: len(response.body.data)
+      total: response.body.total
+      agentId: response.body.data[0].metadata.agent.id
+      hostname: response.body.data[0].metadata.host.hostname
+      hostStatus: response.body.data[0].host_status
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-endpointisolateaction
+  - id: isolate_host
+    title: 隔离主机
+    description: 将主机从网络隔离，直到被释放。动作异步执行，可用「查询响应动作状态」跟踪。
+    category: response
+    inputs:
+      - name: endpoint_ids
+        label: 终端 ID 列表
+        type: list
+        required: true
+        description: 终端的 agent ID（metadata.agent.id）
+      - name: comment
+        label: 说明
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/endpoint/action/isolate
+      headers:
+        kbn-xsrf: "true"
+      body:
+        endpoint_ids: "{{ inputs.endpoint_ids }}"
+        comment: "{{ inputs.comment }}"
+    output:
+      actionId: response.body.data.id
+      actionStatus: response.body.data.status
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-endpointunisolateaction
+  - id: release_host
+    title: 释放主机
+    description: 解除主机的网络隔离。动作异步执行，可用「查询响应动作状态」跟踪。
+    category: response
+    inputs:
+      - name: endpoint_ids
+        label: 终端 ID 列表
+        type: list
+        required: true
+        description: 终端的 agent ID（metadata.agent.id）
+      - name: comment
+        label: 说明
+        type: string
+        required: true
+    request:
+      method: POST
+      path: /s/{{ params.space_id }}/api/endpoint/action/unisolate
+      headers:
+        kbn-xsrf: "true"
+      body:
+        endpoint_ids: "{{ inputs.endpoint_ids }}"
+        comment: "{{ inputs.comment }}"
+    output:
+      actionId: response.body.data.id
+      actionStatus: response.body.data.status
+  # Docs: https://www.elastic.co/docs/api/doc/kibana/operation/operation-endpointgetactionsdetails
+  - id: get_action_status
+    title: 查询响应动作状态
+    category: enrichment
+    inputs:
+      - name: action_id
+        label: 动作 ID
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /s/{{ params.space_id }}/api/endpoint/action/{{ inputs.action_id }}
+    output:
+      command: response.body.data.command
+      actionStatus: response.body.data.status
+      isCompleted: coalesce(response.body.data.isCompleted, response.body.data.isComplete)
+      wasSuccessful: response.body.data.wasSuccessful
+      completedAt: response.body.data.completedAt

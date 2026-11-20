@@ -1,0 +1,41 @@
+# Written for LoopForge from IPinfo's public API documentation.
+id: ipinfo
+title: IPinfo
+vendor: IPinfo
+description: 查询 IP 的地理位置、主机名和所属组织（ASN）。
+docs: https://ipinfo.io/developers
+baseUrl: https://ipinfo.io
+auth:
+  type: bearer
+  secret: token
+secrets:
+  - name: token
+    label: API Token
+    description: 可不填：不带 Token 也能调用，但返回的数据较少，且每月约 5 万次额度。
+testAction: ip_lookup
+testInputs:
+  ip: 8.8.8.8
+actions:
+  # Docs: https://ipinfo.io/developers/ipinfo-api
+  - id: ip_lookup
+    title: IP 查询
+    category: enrichment
+    inputs:
+      - name: ip
+        label: IP 地址
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /{{ inputs.ip }}/json
+    output:
+      hostname: response.body.hostname
+      city: response.body.city
+      region: response.body.region
+      country: response.body.country
+      loc: response.body.loc
+      org: response.body.org
+      postal: response.body.postal
+      timezone: response.body.timezone
+      anycast: response.body.anycast
+      bogon: response.body.bogon

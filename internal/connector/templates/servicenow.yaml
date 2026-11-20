@@ -1,0 +1,371 @@
+# Written for LoopForge from ServiceNow's public API documentation.
+id: servicenow
+title: ServiceNow
+vendor: ServiceNow
+description: 通过 ServiceNow Table API 创建、查询、更新和解决事件（incident），添加评论和工作备注，查询用户和 CMDB 配置项。服务地址填实例地址，例如 https://your-instance.service-now.com；用集成账号的用户名和密码认证，账号需要相应表的读写角色（例如 itil）。
+docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+auth:
+  type: basic
+  username: username
+  password: password
+secrets:
+  - name: username
+    label: 用户名
+    required: true
+  - name: password
+    label: 密码
+    required: true
+testAction: query_incidents
+testInputs:
+  limit: 1
+actions:
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: create_incident
+    title: 创建事件
+    description: 在 incident 表新建记录。紧急度和影响 1 = 高、2 = 中、3 = 低；分配组、调用人、配置项填 sys_id。
+    category: utility
+    inputs:
+      - name: short_description
+        label: 简述
+        type: string
+        required: true
+      - name: description
+        label: 描述
+        type: string
+      - name: urgency
+        label: 紧急度
+        type: string
+        enum: ["1", "2", "3"]
+        default: "3"
+      - name: impact
+        label: 影响
+        type: string
+        enum: ["1", "2", "3"]
+        default: "3"
+      - name: caller_id
+        label: 调用人 sys_id
+        type: string
+      - name: assignment_group
+        label: 分配组 sys_id
+        type: string
+      - name: cmdb_ci
+        label: 配置项 sys_id
+        type: string
+    request:
+      method: POST
+      path: /api/now/table/incident
+      query:
+        sysparm_exclude_reference_link: "true"
+      body:
+        short_description: "{{ inputs.short_description }}"
+        description: "{{ inputs.description }}"
+        urgency: "{{ inputs.urgency }}"
+        impact: "{{ inputs.impact }}"
+        caller_id: "{{ inputs.caller_id }}"
+        assignment_group: "{{ inputs.assignment_group }}"
+        cmdb_ci: "{{ inputs.cmdb_ci }}"
+    success: [201]
+    output:
+      sysId: response.body.result.sys_id
+      number: response.body.result.number
+      state: response.body.result.state
+      priority: response.body.result.priority
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: get_incident
+    title: 查询事件
+    description: 按 sys_id 读取事件。
+    category: enrichment
+    inputs:
+      - name: sys_id
+        label: sys_id
+        type: string
+        required: true
+      - name: display_value
+        label: 返回显示值
+        type: string
+        enum: ["false", "true", "all"]
+        default: "false"
+        description: true 返回选项和引用字段的显示文本，all 同时返回值和显示文本
+    request:
+      method: GET
+      path: /api/now/table/incident/{{ inputs.sys_id }}
+      query:
+        sysparm_display_value: "{{ inputs.display_value }}"
+        sysparm_exclude_reference_link: "true"
+    output:
+      sysId: response.body.result.sys_id
+      number: response.body.result.number
+      shortDescription: response.body.result.short_description
+      state: response.body.result.state
+      priority: response.body.result.priority
+      assignmentGroup: response.body.result.assignment_group
+      assignedTo: response.body.result.assigned_to
+      record: response.body.result
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: find_incident
+    title: 按编号查找事件
+    description: 按事件编号（例如 INC0010001）查找，返回 sys_id 供其他动作使用。
+    category: enrichment
+    inputs:
+      - name: number
+        label: 事件编号
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/now/table/incident
+      query:
+        sysparm_query: "number={{ inputs.number }}"
+        sysparm_limit: "1"
+        sysparm_exclude_reference_link: "true"
+    output:
+      found: len(response.body.result) > 0
+      sysId: first(response.body.result).sys_id
+      number: first(response.body.result).number
+      shortDescription: first(response.body.result).short_description
+      state: first(response.body.result).state
+      record: first(response.body.result)
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: query_incidents
+    title: 查询事件列表
+    description: 用编码查询（sysparm_query）列出事件，例如 active=true^priority=1^ORDERBYDESCsys_created_on。
+    category: enrichment
+    inputs:
+      - name: query
+        label: 编码查询
+        type: string
+        description: 留空返回全部（受条数限制）
+      - name: limit
+        label: 最多返回条数
+        type: number
+        default: 50
+      - name: fields
+        label: 返回字段
+        type: string
+        default: sys_id,number,short_description,state,priority,assignment_group,assigned_to,sys_created_on
+        description: 逗号分隔
+    request:
+      method: GET
+      path: /api/now/table/incident
+      query:
+        sysparm_query: "{{ inputs.query }}"
+        sysparm_limit: "{{ inputs.limit }}"
+        sysparm_fields: "{{ inputs.fields }}"
+        sysparm_exclude_reference_link: "true"
+    output:
+      items: response.body.result
+      count: len(response.body.result)
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: set_incident_state
+    title: 更新事件状态
+    description: 只修改状态：1 = 新建、2 = 处理中、3 = 挂起。解决请用"解决事件"。挂起时实例可能还要求挂起原因。
+    category: utility
+    inputs:
+      - name: sys_id
+        label: sys_id
+        type: string
+        required: true
+      - name: state
+        label: 状态
+        type: string
+        enum: ["1", "2", "3"]
+        required: true
+    request:
+      method: PATCH
+      path: /api/now/table/incident/{{ inputs.sys_id }}
+      query:
+        sysparm_exclude_reference_link: "true"
+      body:
+        state: "{{ inputs.state }}"
+    output:
+      number: response.body.result.number
+      state: response.body.result.state
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: assign_incident_group
+    title: 分配事件到组
+    description: 只修改分配组（sys_id 或组名称）。
+    category: utility
+    inputs:
+      - name: sys_id
+        label: 事件 sys_id
+        type: string
+        required: true
+      - name: assignment_group
+        label: 分配组
+        type: string
+        required: true
+    request:
+      method: PATCH
+      path: /api/now/table/incident/{{ inputs.sys_id }}
+      query:
+        sysparm_exclude_reference_link: "true"
+      body:
+        assignment_group: "{{ inputs.assignment_group }}"
+    output:
+      number: response.body.result.number
+      assignmentGroup: response.body.result.assignment_group
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: assign_incident_user
+    title: 分配事件给处理人
+    description: 只修改处理人（用户 sys_id 或用户名）。处理人通常需要属于当前分配组。
+    category: utility
+    inputs:
+      - name: sys_id
+        label: 事件 sys_id
+        type: string
+        required: true
+      - name: assigned_to
+        label: 处理人
+        type: string
+        required: true
+    request:
+      method: PATCH
+      path: /api/now/table/incident/{{ inputs.sys_id }}
+      query:
+        sysparm_exclude_reference_link: "true"
+      body:
+        assigned_to: "{{ inputs.assigned_to }}"
+    output:
+      number: response.body.result.number
+      assignedTo: response.body.result.assigned_to
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: add_comment
+    title: 添加评论
+    description: 写入 comments（对调用人可见的附加评论）。
+    category: utility
+    inputs:
+      - name: sys_id
+        label: 事件 sys_id
+        type: string
+        required: true
+      - name: comment
+        label: 评论
+        type: string
+        required: true
+    request:
+      method: PATCH
+      path: /api/now/table/incident/{{ inputs.sys_id }}
+      query:
+        sysparm_fields: sys_id,number
+      body:
+        comments: "{{ inputs.comment }}"
+    output:
+      number: response.body.result.number
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: add_work_note
+    title: 添加工作备注
+    description: 写入 work_notes（仅内部可见）。
+    category: utility
+    inputs:
+      - name: sys_id
+        label: 事件 sys_id
+        type: string
+        required: true
+      - name: note
+        label: 工作备注
+        type: string
+        required: true
+    request:
+      method: PATCH
+      path: /api/now/table/incident/{{ inputs.sys_id }}
+      query:
+        sysparm_fields: sys_id,number
+      body:
+        work_notes: "{{ inputs.note }}"
+    output:
+      number: response.body.result.number
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: resolve_incident
+    title: 解决事件
+    description: 把状态改为已解决（6），同时写入解决代码和解决说明。解决代码必须是实例中 close_code 的选项值，例如 Solution provided 或 Resolved by caller（因版本而异）。
+    category: utility
+    inputs:
+      - name: sys_id
+        label: 事件 sys_id
+        type: string
+        required: true
+      - name: close_code
+        label: 解决代码
+        type: string
+        required: true
+      - name: close_notes
+        label: 解决说明
+        type: string
+        required: true
+    request:
+      method: PATCH
+      path: /api/now/table/incident/{{ inputs.sys_id }}
+      query:
+        sysparm_exclude_reference_link: "true"
+      body:
+        state: "6"
+        close_code: "{{ inputs.close_code }}"
+        close_notes: "{{ inputs.close_notes }}"
+    output:
+      number: response.body.result.number
+      state: response.body.result.state
+      resolvedAt: response.body.result.resolved_at
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: get_user_by_email
+    title: 按邮箱查找用户
+    description: 在 sys_user 表按邮箱查找用户，返回 sys_id 等。
+    category: enrichment
+    inputs:
+      - name: email
+        label: 邮箱
+        type: string
+        required: true
+    request:
+      method: GET
+      path: /api/now/table/sys_user
+      query:
+        sysparm_query: "email={{ inputs.email }}"
+        sysparm_limit: "1"
+        sysparm_fields: sys_id,user_name,name,email,active,department,title,manager
+        sysparm_exclude_reference_link: "true"
+    output:
+      found: len(response.body.result) > 0
+      sysId: first(response.body.result).sys_id
+      userName: first(response.body.result).user_name
+      name: first(response.body.result).name
+      active: first(response.body.result).active
+      record: first(response.body.result)
+
+  # Docs: https://www.servicenow.com/docs/bundle/zurich-api-reference/page/integrate/inbound-rest/concept/c_TableAPI.html
+  - id: get_ci_by_name
+    title: 按名称查找配置项
+    description: 在 CMDB 配置项表按名称查找（默认 cmdb_ci，可改为 cmdb_ci_server 等子表）。
+    category: enrichment
+    inputs:
+      - name: name
+        label: 配置项名称
+        type: string
+        required: true
+      - name: table
+        label: 表
+        type: string
+        default: cmdb_ci
+    request:
+      method: GET
+      path: /api/now/table/{{ inputs.table }}
+      query:
+        sysparm_query: "name={{ inputs.name }}"
+        sysparm_limit: "10"
+        sysparm_exclude_reference_link: "true"
+    output:
+      found: len(response.body.result) > 0
+      sysId: first(response.body.result).sys_id
+      className: first(response.body.result).sys_class_name
+      record: first(response.body.result)
+      items: response.body.result
+      count: len(response.body.result)
