@@ -78,6 +78,7 @@ type Server struct {
 	alertSources    *alertSourcesHandlers
 	cases           *casesHandlers
 	connections     *connectionsHandlers
+	pilot           *pilotHandlers
 	audit           *auditHandlers
 	businessDomains *businessDomainsHandlers
 	catalog         *catalogHandlers  // catalog.go
@@ -168,6 +169,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 		businessDomains: &businessDomainsHandlers{deps: d},
 		insights:        &insightsHandlers{deps: d},
 		cases:           &casesHandlers{deps: d},
+		pilot:           &pilotHandlers{deps: d},
 		projects:        &projectsHandlers{deps: d},
 		mcp:             &mcpHandlers{deps: d},
 		market:          &marketHandlers{deps: d},
@@ -524,6 +526,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.POST("/api/case-triggers", api.cases.caseTriggers)
 	g.PUT("/api/case-triggers/:id", api.cases.caseTrigger)
 	g.DELETE("/api/case-triggers/:id", api.cases.caseTrigger)
+	g.GET("/api/pilot-report", api.pilot.report)
 	g.GET("/api/audit", api.audit.events)
 	g.GET("/api/audit/export", api.audit.export)
 	g.GET("/api/connectors", api.connections.connectors)

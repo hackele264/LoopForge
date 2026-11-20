@@ -76,6 +76,16 @@ every approval or rejection of one of its steps as `case.approval` with the
 person who decided. See
 [connectors and action nodes](connectors.md).
 
+## Agent verdict
+
+A playbook's 记录研判结论 action (`loopforge.case_set_verdict`) records the
+triage agent's verdict on the case: malicious, benign, false_positive or
+needs_review, with confidence, rationale and the run. The case page shows it
+above the tabs, and the timeline records each verdict as
+`case.agent_verdict`. Only a run can set it; `PUT /api/cases/{id}` ignores
+it. When the analyst closes the case, the resolution is compared with the
+verdict in the [pilot report](pilot.md).
+
 ## Agents
 
 Alert and case reads and writes are MCP tools (`alerts_*`, `cases_*`,
@@ -96,7 +106,9 @@ access (owner, maintainer or member).
 Tables `alerts`, `cases`, `case_counters`, `case_iocs`, `case_events`,
 `case_triggers`, plus `runs.case_id` and `webhook_dedup.case_id`, are created
 by gorm's incremental AutoMigrate; `migrations/041_alerts_cases.sql` is the
-manual equivalent. `TestCaseStorageOnMySQL` covers case numbering and storage
+manual equivalent; `cases.agent_verdict` and `cases.agent_verdict_at`
+(mirrors of the verdict fields, for reporting) are in
+`migrations/050_case_agent_verdict.sql`. `TestCaseStorageOnMySQL` covers case numbering and storage
 on MySQL (`AGENTFLOW_WEBHOOK_TEST_DSN`).
 
 ## Not covered yet

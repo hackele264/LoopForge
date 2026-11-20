@@ -82,12 +82,7 @@ func applyPromptPlaceholders(st *repo.Store, wf domain.WorkflowDefinition, node 
 	if len(upstream) > 0 && !strings.Contains(prompt, "{{upstream}}") {
 		prompt += "\n\n## 上游节点输出\n\n{{upstream}}"
 	}
-	prompt = strings.ReplaceAll(prompt, "{{upstream}}", strings.Join(upstream, "\n\n"))
-	for id, nodeRun := range run.Nodes {
-		prompt = strings.ReplaceAll(prompt, "{{node."+id+".output}}", nodeRun.Output)
-		prompt = strings.ReplaceAll(prompt, "{{node."+id+".data}}", promptJSON(nodeRun.Data, true))
-	}
-	prompt = strings.ReplaceAll(prompt, "{{trigger}}", promptJSON(run.TriggerPayload, false))
+	prompt = applyRunPlaceholders(prompt, wf, run, strings.Join(upstream, "\n\n"))
 	for _, artifact := range run.Artifacts {
 		prompt = strings.ReplaceAll(prompt, "{{artifact."+artifact.NodeID+"."+artifact.Name+"}}", artifactPromptBody(artifact))
 	}
@@ -129,7 +124,7 @@ func upstreamNodeOutputs(wf domain.WorkflowDefinition, node domain.WorkflowNode,
 		// 检测结果：HTTP 200"); what it found is only in Data.
 		text := source.Output
 		if data := promptJSON(source.Data, true); data != "" {
-			text = strings.TrimSpace(text + "\n结构化结果：\n" + data)
+			text = strings.TrimSpace(text + "\n结构化结果：\n" + fencePromptData("node."+edge.Source, data, promptDataBoundary(run.ID)))
 		}
 		if text != "" {
 			upstream = append(upstream, fmt.Sprintf("[%s]\n%s", edge.Source, text))

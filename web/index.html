@@ -377,7 +377,7 @@
         <div><p class="eyebrow">安全运营</p><h1>告警与案件</h1><p>外部告警经 Webhook 进入后在这里汇总；相关告警归并成案件，研判、处置和结论都记在案件时间线上。</p></div>
         <div class="heading-actions"><button id="refreshCases" class="button ghost" type="button">刷新</button></div>
       </div>
-      <div class="case-view-tabs" role="tablist"><button type="button" data-cases-tab="cases" class="active">案件</button><button type="button" data-cases-tab="alerts">告警队列</button><button type="button" data-cases-tab="triggers">触发器</button><button type="button" data-cases-tab="connections">连接</button></div>
+      <div class="case-view-tabs" role="tablist"><button type="button" data-cases-tab="cases" class="active">案件</button><button type="button" data-cases-tab="alerts">告警队列</button><button type="button" data-cases-tab="triggers">触发器</button><button type="button" data-cases-tab="connections">连接</button><button type="button" data-cases-tab="pilot">试点报告</button></div>
       <div id="casesBody"></div>
     </section>
     <section id="approvalsView" class="view page-view">
@@ -1357,8 +1357,9 @@
   <script src="/app/git-ssh-keys.js"></script>
   <script src="/app/git-http-credentials.js"></script>
   <script src="/app/approvals.js"></script>
-  <script src="/app/cases.js?v=20261120soar4c"></script>
+  <script src="/app/cases.js?v=20261121pilot1"></script>
   <script src="/app/case-connections.js?v=20261120pull1"></script>
+  <script src="/app/pilot-report.js?v=20261121pilot1"></script>
   <script src="/app/platform-audit.js?v=20261120soar5"></script>
   <script src="/app/obs-charts.js"></script>
   <script src="/app/observability.js"></script>

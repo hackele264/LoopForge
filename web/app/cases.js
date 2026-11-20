@@ -50,6 +50,7 @@ async function loadCasesView(){
     if(tab==='alerts')got.alerts=await api(`/api/alerts?projectId=${encodeURIComponent(project)}${casesState.uncased?'&uncased=true':''}`,{silent:true});
     if(tab==='triggers')got.triggers=await api(`/api/case-triggers?projectId=${encodeURIComponent(project)}`,{silent:true});
     if(tab==='connections')await loadCaseConnections(project);
+    if(tab==='pilot')await loadPilotReport(project);
   }catch(e){error=e.message}
   if(seq!==casesState.seq)return;
   Object.assign(casesState,got);
@@ -119,6 +120,7 @@ function caseDetailHTML(){
       <button type="submit" class="button primary small">保存</button><span class="case-form-error" role="alert"></span>
     </form>
     ${c.description?`<p class="case-desc">${escapeHTML(c.description)}</p>`:''}
+    ${typeof caseVerdictHTML==='function'?caseVerdictHTML(c):''}
     <div class="case-tabs" role="tablist">${tabs.map(([k,l])=>`<button type="button" role="tab" class="${k===tab?'active':''}" data-case-tab="${k}">${escapeHTML(l)}</button>`).join('')}</div>
     <div class="case-tab-body">${body}</div></aside>`;
 }
@@ -129,11 +131,12 @@ function renderCasesView(){
   $$('#casesView [data-cases-tab]').forEach(b=>b.classList.toggle('active',b.dataset.casesTab===casesState.tab));
   const filters=casesState.tab==='cases'?`<div class="case-filters">${[['open','未关闭'],['closed','已关闭'],['all','全部']].map(([v,l])=>`<button type="button" class="${casesState.filter===v?'active':''}" data-case-filter="${v}">${l}</button>`).join('')}<button type="button" class="button ghost small" data-new-case>+ 新建案件</button></div>`
     :casesState.tab==='alerts'?`<div class="case-filters"><label class="fd-check"><input type="checkbox" data-uncased ${casesState.uncased?'checked':''}><span>只看未建案的告警</span></label></div>`:'';
-  const list=casesState.tab==='cases'?casesListHTML():casesState.tab==='alerts'?alertsListHTML():casesState.tab==='connections'?connectionsHTML():triggersHTML();
+  const list=casesState.tab==='cases'?casesListHTML():casesState.tab==='alerts'?alertsListHTML():casesState.tab==='connections'?connectionsHTML():casesState.tab==='pilot'?pilotReportHTML():triggersHTML();
   const side=casesState.tab==='cases'||casesState.tab==='alerts';
   host.innerHTML=`${casesState.error?`<p class="case-form-error">${escapeHTML(casesState.error)}</p>`:''}${filters}<div class="cases-layout${casesState.detail&&side?' with-detail':''}"><div class="cases-list">${casesState.loading?'<p class="prop-hint">加载中…</p>':list}</div>${side?caseDetailHTML():''}</div>`;
   bindCasesView(host);
   if(casesState.tab==='connections')bindConnections(host);
+  if(casesState.tab==='pilot')bindPilotReport(host);
 }
 
 async function refreshCaseDetail(){if(casesState.detail)await openCase(casesState.detail.case.id);await loadCasesView()}
@@ -195,7 +198,7 @@ function bindCasesView(host){
 }
 
 function bindCasesTabs(){
-  $$('#casesView [data-cases-tab]').forEach(b=>b.onclick=()=>{casesState.tab=b.dataset.casesTab;if(casesState.tab==='triggers'||casesState.tab==='connections')casesState.detail=null;loadCasesView()});
+  $$('#casesView [data-cases-tab]').forEach(b=>b.onclick=()=>{casesState.tab=b.dataset.casesTab;if(casesState.tab==='triggers'||casesState.tab==='connections'||casesState.tab==='pilot')casesState.detail=null;loadCasesView()});
   $('#refreshCases')?.addEventListener('click',()=>refreshCaseDetail());
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bindCasesTabs);else bindCasesTabs();

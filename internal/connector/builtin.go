@@ -21,6 +21,19 @@ type CaseService interface {
 	CaseAddIOCs(ctx context.Context, run RunContext, iocs []domain.CaseIOC) (int, error)
 }
 
+// CaseVerdictService records a triage verdict on the run's case. It is
+// optional: a CaseService without it leaves case_set_verdict unavailable.
+type CaseVerdictService interface {
+	CaseSetVerdict(ctx context.Context, run RunContext, verdict CaseVerdict) (domain.Case, error)
+}
+
+// CaseVerdict is the case_set_verdict action's input.
+type CaseVerdict struct {
+	Verdict    string
+	Confidence *float64
+	Rationale  string
+}
+
 // CaseChange is the case_update action's input.
 type CaseChange struct {
 	Status     string
@@ -63,6 +76,16 @@ func builtinConnector() *Connector {
 				Description:  "把 IOC 列表（如提取 IOC 的 iocs 输出）加到案件。" + caseNote + "。",
 				Inputs:       []Input{{Name: "iocs", Label: "IOC 列表", Type: TypeList, Required: true, Description: "[{type, value}] 列表，例如 {{ nodes.extract.data.iocs }}"}},
 				OutputFields: []string{"added"},
+			},
+			{
+				ID: "case_set_verdict", Title: "记录研判结论", Category: CategoryUtility,
+				Description: "把 Agent 研判结论（malicious / benign / false_positive / needs_review）、置信度和理由记到案件上，用于与分析员关闭案件时的结论对比。" + caseNote + "。",
+				Inputs: []Input{
+					{Name: "verdict", Label: "结论", Type: TypeString, Required: true, Enum: domain.AgentVerdicts, Description: "例如 {{ nodes.triage.data.verdict }}"},
+					{Name: "confidence", Label: "置信度（0–1）", Type: TypeNumber},
+					{Name: "rationale", Label: "理由", Type: TypeString},
+				},
+				OutputFields: []string{"verdict"},
 			},
 		},
 	}
@@ -115,6 +138,22 @@ func (x *Executor) executeBuiltin(ctx context.Context, a *Action, inputs map[str
 			return Result{}, err
 		}
 		return Result{Output: map[string]any{"status": updated.Status, "severity": updated.Severity}, Summary: "已更新案件 #" + fmt.Sprint(updated.Number)}, nil
+	case "case_set_verdict":
+		svc, ok := x.cases.(CaseVerdictService)
+		if !ok {
+			return Result{}, errors.New("记录研判结论未启用")
+		}
+		v := CaseVerdict{}
+		v.Verdict, _ = inputs["verdict"].(string)
+		v.Rationale, _ = inputs["rationale"].(string)
+		if c, ok := inputs["confidence"].(float64); ok {
+			v.Confidence = &c
+		}
+		updated, err := svc.CaseSetVerdict(ctx, run, v)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Output: map[string]any{"verdict": updated.AgentVerdict}, Summary: fmt.Sprintf("案件 #%d 研判结论：%s", updated.Number, updated.AgentVerdict)}, nil
 	case "case_add_iocs":
 		var iocs []domain.CaseIOC
 		list, _ := inputs["iocs"].([]any)

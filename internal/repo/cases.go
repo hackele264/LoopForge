@@ -42,6 +42,10 @@ type caseRow struct {
 	Payload   []byte `gorm:"type:json"`
 	CreatedAt time.Time
 	UpdatedAt time.Time `gorm:"index:idx_cases_project_updated,priority:2"`
+	// AgentVerdict mirrors the payload's agentVerdict and AgentVerdictAt its
+	// agentVerdictFirstAt, for the pilot report (migrations/050).
+	AgentVerdict   string     `gorm:"size:32;not null;default:''"`
+	AgentVerdictAt *time.Time `gorm:"column:agent_verdict_at"`
 }
 
 func (caseRow) TableName() string { return "cases" }
@@ -187,7 +191,7 @@ func caseToRow(c domain.Case) (caseRow, error) {
 	if err != nil {
 		return caseRow{}, err
 	}
-	return caseRow{ID: c.ID, ProjectID: c.ProjectID, Number: c.Number, Status: c.Status, Severity: c.Severity, Payload: payload, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt}, nil
+	return caseRow{ID: c.ID, ProjectID: c.ProjectID, Number: c.Number, Status: c.Status, Severity: c.Severity, Payload: payload, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, AgentVerdict: c.AgentVerdict, AgentVerdictAt: c.AgentVerdictFirstAt}, nil
 }
 
 func caseFromRow(row caseRow) (domain.Case, error) {
