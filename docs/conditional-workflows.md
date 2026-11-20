@@ -13,6 +13,11 @@ them runs exactly as before.
 | `when: "error"` | edge | Taken when the source node fails for good (no retries or rework left). |
 | `outputSchema` | node | JSON Schema for the node's structured output (`NodeRun.data`). |
 | `approvers` | approval node | `{"userIds": [..], "roles": ["owner" \| "maintainer" \| "member" \| "admin"]}` |
+| `forEach` | action node | List expression. The action runs once per element; see [list loops](#list-loops). |
+| `forEachConcurrency` | action node | Items in flight at once: default 4, at most 16. |
+| `forEachLimit` | action node | Most items allowed: default 100, at most 1000. A longer list fails the node before any item runs. |
+| `forEachFailOn` | action node | `any` (default): the node fails if any item fails. `all`: only if every item fails. |
+| `approval` | approval node | `{"requiredApprovals": 2, "timeoutMinutes": 60, "onTimeout": "escalate" \| "reject", "escalateTo": {approvers}}` (see [two-person approval and escalation](#two-person-approval-and-escalation)) |
 
 Validation runs when a workflow is saved and when a run starts: expressions
 must compile and may only read nodes upstream of the node they guard.
@@ -39,7 +44,8 @@ the run. A run whose nodes all succeeded, were skipped or had their failure
 routed ends as `succeeded`.
 
 Rejecting, retrying or rerunning resets nodes to `pending` and clears
-`data`, `skipReason`, `errorRouted` and `decidedBy`; branches are re-derived.
+`data`, `skipReason`, `errorRouted`, `decidedBy` and the approval votes
+(`approval`); branches are re-derived.
 
 ## Expressions
 
@@ -61,6 +67,45 @@ node, which an error edge can handle.
 nodes.triage.data.verdict == "malicious" && nodes.triage.data.confidence >= 0.8
 trigger.severity in ["high", "critical"]
 ```
+
+## List loops
+
+An action node with `forEach` runs its connector action once per element of
+the list the expression yields, for example one reputation lookup per IP in
+the alert:
+
+```json
+{"id": "vt", "type": "action", "forEach": "iocs(trigger, \"ipv4\")", "forEachConcurrency": 4,
+ "action": {"connector": "virustotal", "action": "ip_report", "connectionId": "cn-vt",
+            "inputs": {"ip": "{{ item }}"}}}
+```
+
+- `forEach` is evaluated like `runIf` (trigger, upstream nodes, run) and must
+  yield a list; `null` counts as an empty list, anything else fails the node.
+  Inside the action's input templates `item` is the current element and
+  `index` its zero-based position. Without `forEach` nothing changes.
+- Items run at most `forEachConcurrency` at a time; each call still goes
+  through the connection's rate limit and retry settings. A list longer than
+  `forEachLimit` fails the node before any call, so no indicator is silently
+  left out.
+- Every item runs even when others fail. The node's `data` is
+  `{total, succeeded, failed, results}`, where `results` follows the list
+  order and each entry is `{index, item, ok, output}` or
+  `{index, item, ok: false, error}`. An empty list succeeds with `total: 0`.
+- With `forEachFailOn: any` (the default) one failed item fails the node;
+  with `all` the node fails only when every item failed, and downstream
+  `runIf` can read `nodes.<id>.data.failed`. A failed loop still publishes
+  its `data`, so an error branch can see which items failed.
+- The stored output is bounded at 256 KiB. When the results are larger,
+  first every item's raw response `body` is dropped, then every item's
+  `output`, then the `item` values (errors shortened to 120 characters);
+  `data.truncated` names the last step taken (`bodies`, `outputs` or
+  `items`). The counts are always kept.
+- `maxAttempts` retries the whole loop: every item runs again. Cancelling
+  the run aborts the calls in flight and starts no more; a cancelled loop
+  publishes nothing.
+- Each external call is audited on its own; a case timeline gets one
+  summary entry per loop instead of one per item.
 
 ## Trigger payloads and script output
 
@@ -101,6 +146,61 @@ A gate with `approvers` accepts only the users it names; service tokens without
 a user are always refused. Set `AGENTFLOW_APPROVAL_REQUIRE_NAMED=true` to make
 every gate refuse service callers.
 
+## Two-person approval and escalation
+
+An approval node's optional `approval` rule adds:
+
+| Field | Meaning |
+|---|---|
+| `requiredApprovals` | 1 to 3 (default 1). The node passes only after that many approvals from distinct named users who each satisfy `approvers` (and, before a response action, the [named-person rule](security.md#approvals-that-release-response-actions)). |
+| `timeoutMinutes` | 1 to 43200. A deadline counted from when the node starts waiting. |
+| `onTimeout` | Required with `timeoutMinutes`: `escalate` or `reject`. |
+| `escalateTo` | Required with `escalate`: an approver policy (`userIds`, `roles`). |
+
+Saving refuses a rule on a non-approval node, values out of range,
+`requiredApprovals` above the number of users when `approvers` lists only
+users, `escalate` without `escalateTo`, and `onTimeout`/`escalateTo` without a
+timeout.
+
+Votes:
+
+- With `requiredApprovals` above 1, service callers are refused and the same
+  user approving twice gets `409` (`你已经批准过该关口`). Each partial approval
+  adds a `gate.vote` event; the node stays `waiting_approval`, the run stays
+  `waiting`, and `POST /api/runs/{id}/approve` answers
+  `{"ok": true, "approval": {"approved": false, "approvals": 1, "required": 2, ...}}`.
+- The approval that reaches the count passes the node as before; the gate's
+  `decision.md` lists every approver.
+- One rejection (打回) by an allowed approver decides at once, whatever the
+  votes.
+- Votes live on the node (`approval.votes` with user, time and whether the
+  vote came from an escalation approver). They are cleared whenever the node
+  starts waiting again: retry, rework (打回 upstream) or rerun.
+
+Deadlines:
+
+- `approval.deadline` is stored on the node's run state, so it survives
+  restarts. Every instance that executes runs scans waiting approval nodes
+  every 15 seconds; firing a deadline takes the run lease and writes at the
+  revision it read, so with several replicas exactly one acts on it and a
+  later scan finds it handled. API-only instances (`AGENTFLOW_ROLE=api`)
+  leave deadlines to workers.
+- `escalate`: the node stays waiting and is marked `escalated`. Users allowed
+  by `escalateTo` may now approve or reject as well; the original approvers
+  still can, and votes already cast still count. A `gate.escalated` event
+  (actor `system`) is recorded and sends the SOP's waiting reminders again
+  through its notification bots (interactive cards included). There is only
+  one escalation step and no direct message to the escalation approvers.
+- `reject`: the system decides (actor kind `system`, login
+  `system:approval-timeout`). With `rejectTo` and rework budget left
+  (`maxReworks`, at least one, as for automatic rejects) the run is sent back
+  as a 打回 would; otherwise the node fails with
+  `审批超时（N 分钟），已自动拒绝`, which its `when: "error"` edges handle
+  (`errorRouted: true`) or which fails the run.
+
+Every approval vote, rejection, escalation and timeout rejection of a node
+with a rule is written to the [audit log](security.md#audit-log).
+
 ## In the designer
 
 - Every node except preview builds has three outlets: 成功 (success edge),
@@ -110,16 +210,26 @@ every gate refuse service callers.
   more inputs also get the join choice. 试运行条件 evaluates the condition
   through `POST /api/workflow-conditions/check` against a sample trigger and
   sample upstream results, prefilled from the upstream nodes' output schemas. Script nodes add an output schema
-  editor, and approval nodes a 谁可以确认 picker (roles plus user IDs).
+  editor, and approval nodes a 谁可以确认 picker (roles plus user IDs), 需要几人批准,
+  审批时限, 超时后 (escalate / reject) and 升级给 fields.
+- Action nodes have a 逐项执行 field for `forEach`; once it is filled, 同时执行,
+  最多几项 and 节点何时算失败 set the concurrency, limit and failure policy.
+  Looping nodes carry a 逐项执行 tag, and the run page lists each item's
+  result in a table above the structured output.
 - Nodes show their condition, join and approvers as tags. 配置检查 warns
   about invalid conditions, conditions that read nodes without an output
   schema, `join: any` with a single input, join-all nodes that merge
   mutually exclusive branches, and nodes with both reject and error routes.
 - The run page shows skipped nodes dashed, and the node panel lists the skip
-  reason, routed failures, the deciding user and the structured output.
+  reason, routed failures, the deciding user and the structured output. For
+  approval nodes with a rule it also shows 已批准 N/M with each approver, the
+  deadline and whether the gate escalated or timed out; the waiting-approval
+  card shows the same progress.
 
 ## Database
 
 `runs.trigger_payload` and `run_events.actor_user_id` are added by gorm's
 incremental AutoMigrate; `migrations/039_conditional_workflows.sql` is the
-manual equivalent.
+manual equivalent. Approval rules are part of the workflow definition and
+approval votes and deadlines part of the node state (`run_nodes.payload`), so
+they need no schema change.

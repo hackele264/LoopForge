@@ -49,7 +49,7 @@ func validateActionNode(wf domain.WorkflowDefinition, n domain.WorkflowNode, cat
 			return fmt.Errorf("input %s is required", in.Name)
 		}
 	}
-	if err := CheckNodeInputs(n.Action.Inputs); err != nil {
+	if err := CheckNodeInputsFor(n); err != nil {
 		return err
 	}
 	up := domain.UpstreamNodes(wf, n.ID)

@@ -71,9 +71,62 @@ function actionNodeMeta(n,catalog,connections,wf){
     const conn=(connections||[]).find(c=>c.id===a.connectionId);
     tags.push(conn?{text:conn.name}:{text:a.connectionId?'连接不可用':'未选连接',warn:true});
   }
+  if(String(n.forEach||'').trim())tags.push({text:forEachTagText(n)});
   const problems=actionNodeProblems(n,catalog,wf).filter(p=>p!=='未选择连接');
   if(problems.length)tags.push({text:problems[0],warn:true});
   return {kind:'action',subtitle:`${connector.title} · ${action.title}`,tags};
+}
+
+// List loops (forEach): the action runs once per element of a list
+// expression, with the element as {{ item }} and its position as {{ index }}.
+// Mirrors the bounds in internal/domain/workflow_foreach.go.
+const FOR_EACH_BOUNDS={forEachConcurrency:{def:4,max:16},forEachLimit:{def:100,max:1000}};
+function forEachTagText(n){
+  return `逐项执行 · 并发 ${n.forEachConcurrency||FOR_EACH_BOUNDS.forEachConcurrency.def}`;
+}
+// What downstream conditions and inputs can read from a looping node.
+function forEachOutputRefs(nodeId){
+  return ['total','succeeded','failed','results'].map(f=>`nodes.${nodeId}.data.${f}`);
+}
+// Applies one loop field from the form. Clearing forEach clears its settings
+// so the saved node carries no inactive values; blank numbers mean default.
+function applyForEachField(n,key,raw){
+  const text=String(raw??'');
+  if(key==='forEach'){
+    if(text.trim()){n.forEach=text;return}
+    delete n.forEach;delete n.forEachConcurrency;delete n.forEachLimit;delete n.forEachFailOn;
+    return;
+  }
+  if(key==='forEachFailOn'){
+    if(text==='all')n.forEachFailOn='all';else delete n.forEachFailOn;
+    return;
+  }
+  const bound=FOR_EACH_BOUNDS[key];
+  if(!bound)return;
+  const num=Math.floor(Number(text));
+  if(!text.trim()||!Number.isFinite(num)||num<=0)delete n[key];
+  else n[key]=Math.min(num,bound.max);
+}
+// Run page: a compact per-item table for a looping node's structured output.
+function forEachResultsHTML(data){
+  if(!data||typeof data!=='object'||!Array.isArray(data.results)||typeof data.total!=='number')return '';
+  const cut=200,rows=data.results.slice(0,cut);
+  const brief=r=>{
+    if(!r.ok)return r.error||'失败';
+    const out=r.output&&typeof r.output==='object'?Object.entries(r.output).filter(([k])=>k!=='body'&&k!=='bodyTruncated'):[];
+    return out.map(([k,v])=>`${k}=${typeof v==='string'?v:JSON.stringify(v)}`).join(' · ');
+  };
+  const item=v=>v==null?'—':(typeof v==='string'?v:JSON.stringify(v));
+  const truncated={bodies:'响应原文已省略',outputs:'输出过大，只保留每项成败',items:'输出过大，只保留序号和成败'}[data.truncated];
+  const head=`共 ${data.total} 项 · 成功 ${data.succeeded||0} · 失败 ${data.failed||0}${truncated?` · ${truncated}`:''}`;
+  const body=rows.map(r=>`<tr class="${r.ok?'':'is-failed'}"><td>${Number(r.index)+1}</td><td><code>${escapeHTML(item(r.item))}</code></td><td>${r.ok?'成功':'失败'}</td><td>${escapeHTML(brief(r))}</td></tr>`).join('');
+  const more=data.results.length>cut?`<p class="prop-hint">只显示前 ${cut} 项，完整结果见下方结构化输出。</p>`:'';
+  return `<div class="node-foreach"><div><b>逐项结果</b><span>${escapeHTML(head)}</span></div>${rows.length?`<table class="node-foreach-table"><thead><tr><th>#</th><th>项</th><th>结果</th><th>输出 / 错误</th></tr></thead><tbody>${body}</tbody></table>`:''}${more}</div>`;
+}
+function forEachPaneHTML(n){
+  const on=!!String(n.forEach||'').trim();
+  const num=(key,label)=>`<div class="fd-field"><label>${label}</label><input class="input" type="number" min="1" max="${FOR_EACH_BOUNDS[key].max}" data-foreach="${key}" value="${n[key]||''}" placeholder="默认 ${FOR_EACH_BOUNDS[key].def}"></div>`;
+  return `<div class="fd-field"><label>逐项执行（可选）</label><textarea class="input fd-mono" rows="2" data-foreach="forEach" spellcheck="false" placeholder='例如：iocs(trigger, "ipv4")'>${escapeHTML(n.forEach||'')}</textarea><p class="prop-hint">填一个得到列表的表达式，动作会对每一项执行一次；输入里用 <code>{{ item }}</code> 引用当前项，<code>{{ index }}</code> 是从 0 开始的序号。</p></div><div data-foreach-settings ${on?'':'hidden'}><div class="fd-row2">${num('forEachConcurrency','同时执行')}${num('forEachLimit','最多几项')}</div><div class="fd-field"><label>节点何时算失败</label><select class="select" data-foreach="forEachFailOn"><option value="any" ${n.forEachFailOn!=='all'?'selected':''}>任一项失败</option><option value="all" ${n.forEachFailOn==='all'?'selected':''}>全部失败</option></select><p class="prop-hint">每一项都会执行完，一项失败不影响其他项；列表超过上限时节点直接失败。重试会重新执行全部项。每项结果在 <code>results</code> 里按列表顺序排列：<code>index</code>、<code>item</code>、<code>ok</code>、<code>output</code> 或 <code>error</code>。</p></div></div>`;
 }
 
 const actionState={catalog:null,connections:{},loading:{}};
@@ -132,9 +185,9 @@ function flowActionPaneHTML(n){
     const req=input.required&&input.default==null?' <span class="fd-req">*</span>':'';
     return `<div class="fd-field"><label>${escapeHTML(input.label||input.name)}${req}</label><input class="input fd-mono" data-action-input="${escapeHTML(input.name)}" value="${escapeHTML((a.inputs||{})[input.name]||'')}" placeholder="${escapeHTML(ph)}" spellcheck="false">${input.description&&input.description!==ph?`<p class="prop-hint">${escapeHTML(input.description)}</p>`:''}</div>`;
   }).join('');
-  const refs=actionOutputRefs(n.id,action).map(r=>`<code>${escapeHTML(r)}</code>`).join(' ');
+  const refs=(String(n.forEach||'').trim()?forEachOutputRefs(n.id):actionOutputRefs(n.id,action)).map(r=>`<code>${escapeHTML(r)}</code>`).join(' ');
   const help=`<p class="prop-hint">输入可写固定值，或用 <code>{{ trigger.alert.sender }}</code>、<code>{{ first(nodes.extract.data.url) }}</code> 引用告警和上游输出。</p><p class="prop-hint">下游可读：${refs}</p>`;
-  return connectorSel+actionSel+warn+connSel+inputs+(action.inputs?.length||refs?help:'');
+  return connectorSel+actionSel+warn+connSel+inputs+(action.inputs?.length||refs?help:'')+forEachPaneHTML(n);
 }
 function bindFlowActionPane(host,n){
   const a=n.action||(n.action={connector:'',action:'',connectionId:'',inputs:{}});
@@ -161,6 +214,17 @@ function bindFlowActionPane(host,n){
     const v=el.value;
     a.inputs=a.inputs||{};
     if(String(v).trim())a.inputs[el.dataset.actionInput]=v;else delete a.inputs[el.dataset.actionInput];
+    dirty();renderCanvas();
+  });
+  host.querySelectorAll('[data-foreach]').forEach(el=>el.oninput=()=>{
+    const key=el.dataset.foreach;
+    flowHistory.record({merge:`p:${n.id}:${key}`});
+    applyForEachField(n,key,el.value);
+    if(key==='forEach'){
+      const box=host.querySelector('[data-foreach-settings]');
+      if(box)box.hidden=!n.forEach;
+      if(!n.forEach)host.querySelectorAll('[data-foreach-settings] [data-foreach]').forEach(x=>{x.value=x.tagName==='SELECT'?'any':''});
+    }
     dirty();renderCanvas();
   });
   host.querySelector('[data-open-connections]')?.addEventListener('click',()=>{

@@ -15,6 +15,7 @@ func (e *Engine) waitApproval(runID string, node domain.WorkflowNode, msg string
 		nr := r.Nodes[node.ID]
 		nr.Status = "waiting_approval"
 		nr.FinishedAt = time.Now().UTC()
+		startApprovalWait(nr, node, nr.FinishedAt)
 		e.event(r, node.ID, "gate.waiting", msg)
 	})
 }

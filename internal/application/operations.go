@@ -128,7 +128,7 @@ func PublicOperations() []Operation {
 		{Name: "runs_logs_list", Description: "Page through Run worker logs", Method: "GET", Path: "/api/runs/{id}/logs", ReadOnly: true},
 		{Name: "runs_logs_download", Description: "Download complete Run worker logs", Method: "GET", Path: "/api/runs/{id}/logs.txt", ReadOnly: true},
 		{Name: "runs_artifact_get", Description: "Read an immutable Run artifact", Method: "GET", Path: "/api/runs/{id}/artifacts/{artifactId}", ReadOnly: true},
-		{Name: "runs_approve", Description: "Approve a waiting Run", Method: "POST", Path: "/api/runs/{id}/approve"},
+		{Name: "runs_approve", Description: "Approve a waiting Run node; a gate that needs several approvals keeps waiting and answers with its progress (approval.approvals / approval.required)", Method: "POST", Path: "/api/runs/{id}/approve"},
 		{Name: "runs_pass", Description: "Manually pass a failed script node and continue downstream", Method: "POST", Path: "/api/runs/{id}/pass"},
 		{Name: "runs_reject", Description: "Reject a waiting Run back to a node", Method: "POST", Path: "/api/runs/{id}/reject"},
 		{Name: "runs_retry", Description: "Retry a failed or cancelled Run", Method: "POST", Path: "/api/runs/{id}/retry"},

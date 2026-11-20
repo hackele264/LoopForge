@@ -530,6 +530,13 @@ body.obs-expand-open{overflow:hidden}
 .node-branch-facts{display:grid;gap:8px;margin:10px 0}
 .node-branch-facts>div:not(.node-output){display:flex;justify-content:space-between;gap:12px;font-size:12.5px}
 .node-branch-facts>div:not(.node-output) span{color:var(--muted)}
+.node-branch-facts>div.node-foreach{display:grid;gap:6px}
+.node-branch-facts>.node-foreach>div{display:flex;justify-content:space-between;gap:12px;font-size:12.5px}
+.node-branch-facts>.node-foreach>div span{color:var(--muted)}
+.node-foreach-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.node-foreach-table th,.node-foreach-table td{text-align:left;vertical-align:top;padding:5px 6px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.node-foreach-table th{color:var(--muted);font-weight:500}
+.node-foreach-table tr.is-failed td:nth-child(3),.node-foreach-table tr.is-failed td:nth-child(4){color:var(--red)}
 
 /* 告警与案件 */
 #casesView .case-view-tabs{display:flex;gap:4px;margin:0 0 12px;border-bottom:1px solid var(--line-strong)}

@@ -65,6 +65,10 @@ func (e *Engine) executeActionNode(ctx context.Context, runID string, wf domain.
 		}
 		conn = &found
 	}
+	if node.HasForEach() {
+		e.executeActionForEach(ctx, runID, run, node, c, a, conn, attempt, generation, fail)
+		return
+	}
 	inputs, err := connector.EvalNodeInputs(node.Action.Inputs, conditionEnv(run))
 	if err != nil {
 		fail(err)
