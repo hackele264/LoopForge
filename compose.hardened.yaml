@@ -13,6 +13,9 @@
 #   interactive session.
 # - Set AGENTFLOW_SECURE_COOKIES=true in .env once the site is served over
 #   HTTPS.
+# - Credentials are encrypted with the key file from compose.yaml
+#   (AGENTFLOW_SECRET_KEY_FILE under LOOPFORGE_DATA_DIR, still mounted here);
+#   separate workers need the same key.
 services:
   platform:
     environment:

@@ -152,6 +152,57 @@ On platform execution each project holds at most 10 top-level SOP runs at once; 
 
 The per-project limit lives in `projects.run_limit`, which gorm's AutoMigrate adds on start; `migrations/045_project_run_limit.sql` is the manual equivalent.
 
+## Credential encryption
+
+Connection secrets and notification bot credentials are encrypted at rest
+([security](security.md#credential-encryption-at-rest)). The installer and
+`./start.sh pull` create the key once at
+`$LOOPFORGE_DATA_DIR/secrets/credentials.key` (`scripts/ensure-secret-key.sh`;
+an existing key is never replaced), and `compose.yaml` passes it as
+`AGENTFLOW_SECRET_KEY_FILE`. `bash scripts/dev.sh` uses
+`.local/credentials.key`. Other deployments set `AGENTFLOW_SECRET_KEY_FILE`
+or `AGENTFLOW_SECRET_KEY` (base64 of 32 bytes; `loopforge-secrets genkey`
+prints one) on every API and worker instance. Back the key up apart from the
+database: without it the encrypted credentials are lost.
+
+The platform refuses to start when a stored credential cannot be decrypted,
+and names the variables to check. Without any key it starts, stores
+credentials in plaintext and logs a warning.
+
+### Upgrading an existing installation
+
+Startup never rewrites rows. Credentials saved before the upgrade stay in
+plaintext, still readable, until an operator encrypts them:
+
+```bash
+./start.sh pull                     # creates the key file, restarts the platform
+docker compose --profile platform exec platform loopforge-secrets status
+docker compose --profile platform exec platform loopforge-secrets encrypt -dry-run
+docker compose --profile platform exec platform loopforge-secrets encrypt
+```
+
+`status` decrypts every sealed row and counts rows per table as plaintext,
+current key and previous key. `encrypt` seals plaintext rows and re-seals
+rows under a previous key with the current one, in one transaction per
+table, changing only the credential column. Both print counts only, never
+values. `encrypt` is idempotent; `-dry-run` writes nothing. The command reads
+`AGENTFLOW_MYSQL_DSN` and the key variables from its environment; outside
+Compose, build it with `go build ./cmd/loopforge-secrets`. The schema is
+unchanged, so there is no SQL migration.
+
+### Rotating the key
+
+1. Copy the current key into a file, for example
+   `$LOOPFORGE_DATA_DIR/secrets/previous.keys`, and set
+   `AGENTFLOW_SECRET_KEYS_PREVIOUS_FILE` to that path in `.env` (or list old
+   keys, comma-separated, in `AGENTFLOW_SECRET_KEYS_PREVIOUS`).
+2. Write a new key into `credentials.key` (`loopforge-secrets genkey`), then
+   restart the platform and workers: new writes use the new key and old rows
+   still decrypt.
+3. Run `loopforge-secrets encrypt`, then `status` until `previous-key=0` on
+   every table.
+4. Remove the previous key from the configuration and restart.
+
 ## Observability schema
 
 After the base tables have been created, run `bash scripts/install-schema-extensions.sh` for the Compose database. It installs absent `run_telemetry.adapter` and `run_logs.level` columns and their indexes from upstream migration `001_run_obs_generated_columns.sql`, then replays the `INSERT IGNORE` starter catalog. Both steps can be repeated without touching existing rows. The installer runs it before printing the address, and `./start.sh pull` runs it again after recreating containers, so an older data volume upgraded to a newer image picks up the columns the new code reads. Application startup does not run data migrations.
@@ -167,6 +218,7 @@ For an external MySQL deployment, review that migration and check column existen
 | Already applied by the installer and `./start.sh pull` | `001_run_obs_generated_columns.sql`, `migrations/seed/*.sql`, `031_generic_backend_openssh.sql` | Nothing; the script above covers it |
 | Must run once when upgrading | `009_bot_interactions_utf8mb4.sql` (`CONVERT TO` an existing table), new tables and columns added by hand | Run it on the database after reviewing prerequisites |
 | Backfills and one-time rewrites of existing rows | `016_public_optional_repositories.sql`, `021_assistant_session_sources.sql` | Run it if the history matters; skipping it changes no schema but leaves old rows unconverted |
+| Operator commands instead of SQL | `loopforge-secrets encrypt` ([credential encryption](#credential-encryption)) | Run it once after upgrading to a release with credential encryption |
 
 ## Updating existing public SOPs
 

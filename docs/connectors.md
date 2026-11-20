@@ -43,10 +43,39 @@ Actions come in three categories:
 | Splunk | 搜索（oneshot） | Bearer token |
 | 企业微信群机器人 | 发送文本 / Markdown | `key` query parameter |
 | 钉钉群机器人 | 发送 Markdown | `access_token` query parameter |
+| Microsoft Sentinel | 事件列表/详情, 更新状态, 指派, **关闭事件**, 评论, 事件告警, 事件实体, 监视列表条目, **添加监视列表条目** | OAuth 2.0 client credentials (Azure Resource Manager) |
+| Elastic Security | 搜索告警, 设置告警状态, **关闭告警**, 添加/移除标签, 规则列表, **启用规则**, **停用规则**, 终端列表, **隔离主机**, **解除隔离**, 响应动作状态 | `ApiKey` header (Kibana) |
+| Wazuh（索引器） | 搜索告警, 搜索漏洞 | Basic (indexer, port 9200) |
+| Okta | 查询用户, 按邮箱查找, 用户列表, 用户所属组, 用户 MFA 因子, **暂停**, **恢复**, **停用**, **清除会话**, **密码过期**, **重置密码**, **加入组**, **移出组**, **重置 MFA** | `SSWS` header |
+| Jira | 当前用户, 创建 issue, 查询 issue, JQL 搜索, 评论, 可用流转, 流转, 指派 | Basic (email + API token) |
+| Slack | auth.test, 发消息, 更新消息, 按邮箱查用户, 频道列表, 建频道, 邀请成员, 频道历史, 表情回应 | Bot token (Bearer) |
+| PagerDuty | 事件列表/详情, 创建事件, 添加备注, 确认, 解决, 值班人 | `Token token=` header; writes need the `from_email` param |
+| ServiceNow | 创建/查询/检索 incident, 设置状态, 指派组, 指派人, 评论, 工作备注, 解决, 按邮箱查用户, 按名称查 CI | Basic |
+| ThreatFox | IOC 搜索, 哈希搜索, 近期 IOC | `Auth-Key` header |
+| URLhaus | URL / 主机 / 载荷（MD5、SHA256）查询 | `Auth-Key` header |
+| FIRST EPSS | CVE 利用概率评分 | none |
+| IPinfo | IP 查询 | Bearer token (optional) |
+| MISP | 版本, 搜索属性, 搜索事件, 事件详情, 新建事件, 添加属性, 添加目击 | `Authorization` header |
 
 Bold actions are response actions. The templates were written for LoopForge
-from each vendor's public API documentation; check permissions and regional
-endpoints against your tenant before relying on them.
+from each vendor's public API documentation; each action of the newer
+templates names the page it follows in a `# Docs:` comment. Check permissions
+and regional endpoints against your tenant before relying on them.
+
+Known limits of the newer templates:
+
+- They have been validated by the template loader but not yet run against
+  live tenants.
+- Microsoft Sentinel's incident update is a full PUT: 更新状态, 指派 and
+  关闭事件 take title, status and severity as required inputs, so a playbook
+  should read them from 事件详情 first.
+- Okta password resets always email the user; no reset or activation link is
+  declared as an output. The parsed response body is still kept (see
+  [Inputs and outputs](#inputs-and-outputs)).
+- List actions return one page; Okta's next-page cursor is in the `Link`
+  response header and is not exposed.
+- SentinelOne is not included: its API reference is only available inside an
+  authenticated console.
 
 ## Connections
 
@@ -75,9 +104,15 @@ An action node may only use a connection of its run's project. Secrets never
 enter a template, a node configuration or a log line: authentication is
 applied after the request is built, and secret values are replaced with
 `[redacted]` in any error message. Requests never follow a redirect to
-another host, so header credentials cannot leak through one. Secrets are
-stored in the database without encryption, like the platform's other
-credentials; restrict database access accordingly.
+another host, so header credentials cannot leak through one.
+
+Secrets are encrypted at rest with AES-256-GCM when the platform has a key
+(`AGENTFLOW_SECRET_KEY_FILE`, created by the installer); each value is bound
+to its connection, so it cannot be copied to another row. A connection whose
+secrets cannot be decrypted is refused (HTTP 503, or a failed action node);
+it is never used with empty secrets. Without a key, secrets are stored in
+plaintext and the platform logs a warning at startup. See
+[credential encryption](security.md#credential-encryption-at-rest).
 
 ## Rate limits and retries
 
@@ -138,9 +173,9 @@ Functions available in conditions and templates:
 | `len`, `lower`, `upper`, `contains`, `startsWith`, `endsWith`, `exists` | As in conditions |
 
 Every action's output has `status` (the HTTP status) and its declared output
-fields, for example `nodes.vt.data.malicious`. Actions without output fields
-also keep the response `body`. An output larger than 128 KiB drops the body
-and sets `bodyTruncated`.
+fields, for example `nodes.vt.data.malicious`, plus the parsed response
+`body`, whether or not output fields are declared. An output larger than
+128 KiB drops the body and sets `bodyTruncated`.
 
 ## Case audit
 
@@ -233,7 +268,11 @@ cannot push to a webhook: see [pull alert sources](alert-sources.md).
 Table `connections` is created by gorm's incremental AutoMigrate;
 `migrations/042_connections.sql` is the manual equivalent. Rate limit and
 retry settings are fields of the stored JSON payload and need no DDL
-(`migrations/046_phase6_backpressure.sql`).
+(`migrations/046_phase6_backpressure.sql`). With a key configured,
+`connections.secrets` holds a JSON string `"lfenc:v1:<key id>:<base64>"`
+instead of the JSON object, so the column type is unchanged. Rows written
+before the key was configured stay readable; `loopforge-secrets encrypt`
+seals them ([deployment](deployment.md#credential-encryption)).
 
 ## Not covered yet
 
@@ -241,7 +280,6 @@ retry settings are fields of the stored JSON payload and need no DDL
   processes or with other systems using the same vendor account.
 - Response actions are not retried on 5xx or transport errors; the node's
   `maxAttempts` decides whether the whole action runs again.
-- Secrets are not encrypted at rest.
 - Read-only connector actions are not offered to Agents as MCP tools; an
   Agent can use a vendor's own MCP server instead.
 - No loop over a list (for example one lookup per extracted IP); look up the

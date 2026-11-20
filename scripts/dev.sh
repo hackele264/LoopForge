@@ -7,6 +7,10 @@ set -a
 source .env
 set +a
 mkdir -p .local/bin .local/workspaces
+if [[ -z "${AGENTFLOW_SECRET_KEY:-}" && -z "${AGENTFLOW_SECRET_KEY_FILE:-}" ]]; then
+  export AGENTFLOW_SECRET_KEY_FILE="$PWD/.local/credentials.key"
+  [[ -s "$AGENTFLOW_SECRET_KEY_FILE" ]] || (umask 077; python3 -c 'import base64,os; print(base64.b64encode(os.urandom(32)).decode())' > "$AGENTFLOW_SECRET_KEY_FILE")
+fi
 docker compose up -d --wait mysql
 bash scripts/build-binaries.sh
 if [[ ! -f .local/admin-password ]]; then

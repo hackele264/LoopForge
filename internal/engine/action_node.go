@@ -10,6 +10,7 @@ import (
 
 	"agentflow/internal/connector"
 	"agentflow/internal/domain"
+	"agentflow/internal/repo"
 )
 
 // executeActionNode runs a connector action in the platform process: no
@@ -49,9 +50,13 @@ func (e *Engine) executeActionNode(ctx context.Context, runID string, wf domain.
 			fail(fmt.Errorf("动作「%s」没有选择连接", a.Title))
 			return
 		}
-		found, ok := e.repo.Connection(id)
-		if !ok {
+		found, err := e.repo.Connection(id)
+		if errors.Is(err, repo.ErrConnectionNotFound) {
 			fail(fmt.Errorf("连接 %s 不存在", id))
+			return
+		}
+		if err != nil {
+			fail(fmt.Errorf("连接 %s 无法读取：%w", id, err))
 			return
 		}
 		if found.ProjectID != run.ExecutionContext.ProjectID {

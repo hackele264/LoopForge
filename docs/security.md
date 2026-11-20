@@ -132,6 +132,41 @@ Also:
 | `AGENTFLOW_AUDIT_RETENTION_DAYS` | `365` | Audit log retention; `0` keeps everything |
 | `AGENTFLOW_ALLOW_SIGNUP` | `true` | Self-service sign-up after the first administrator |
 
+## Credential encryption at rest
+
+Connection secrets (`connections.secrets`) and notification bot credentials
+(`user_bot_credentials.ciphertext`) are sealed with AES-256-GCM before they
+are written:
+
+- Stored form: `lfenc:v1:<kid>:<base64(nonce | ciphertext)>`, where `kid` is
+  the first 8 hex characters of a SHA-256 of the key (never the key). In the
+  JSON `connections.secrets` column the envelope is stored as a JSON string.
+- Each value is bound to its table, column and row ID as additional
+  authenticated data: a value copied to another row does not decrypt.
+- Key: `AGENTFLOW_SECRET_KEY_FILE` (a file holding the base64 of 32 random
+  bytes) or `AGENTFLOW_SECRET_KEY` (the value itself), not both. The installer
+  creates `$LOOPFORGE_DATA_DIR/secrets/credentials.key` (mode 0600) and
+  Compose passes it to the platform.
+- Rotation: older keys in `AGENTFLOW_SECRET_KEYS_PREVIOUS` (comma-separated)
+  or `AGENTFLOW_SECRET_KEYS_PREVIOUS_FILE` (one per line) are used only to
+  decrypt; writes always use the current key.
+- Upgrades: rows written in plaintext before a key was configured are still
+  read. `loopforge-secrets encrypt` seals them and re-seals rows under a
+  previous key ([deployment](deployment.md#credential-encryption)).
+- Failure is loud: at startup the platform decrypts every sealed credential
+  and refuses to start if one fails (missing or wrong key), naming the
+  variables to fix. At run time a credential that does not decrypt fails the
+  request or action; it is never replaced with an empty value.
+- Without any key the platform keeps working in plaintext and logs a
+  warning at startup, so existing development setups keep running.
+
+The key protects database dumps, backups and replicas. It does not protect
+against someone who can read the platform's environment or data directory
+(the same holds for `AGENTFLOW_SESSION_SECRET` and the database DSN). Keep
+the key file out of database backups and back it up separately: encrypted
+credentials cannot be recovered without it. API and worker instances need the
+same key.
+
 ## Storage
 
 `audit_events` and the `api_tokens.scopes` / `api_tokens.project_ids` columns
@@ -142,5 +177,21 @@ are created by gorm's incremental AutoMigrate;
 
 - Two-person approval and timed escalation of approvals.
 - A service-account type distinct from user accounts.
-- Encryption at rest for connection secrets and other stored credentials.
+- Encryption at rest for the other stored credentials. These columns are
+  still plaintext (each has its own read and write paths, so they were left
+  out of the first pass):
+
+  | Table | Column | Holds |
+  |---|---|---|
+  | `user_configs` | `git_token`, `gongfeng_refresh_token` | Personal Git token, Gongfeng OAuth refresh token |
+  | `user_configs` | `codebuddy_api_key`, `codex_api_key`, `claude_code_api_key` | Personal model API keys |
+  | `user_configs` | `agent_cli_credentials` | Agent CLI credential bundle |
+  | `user_git_http_credentials` | `token` | Git HTTPS tokens |
+  | `user_git_ssh_keys` | `private_key` | Git SSH private keys |
+  | `platform_codebuddy_keys` | `api_key` | Platform shared CodeBuddy key |
+  | `knowledge_settings` | `token` | Knowledge base upstream token |
+  | `webhooks` | `payload` (`signingSecret`) | Webhook HMAC signing secret (the URL secret is stored hashed) |
+
+  API tokens, webhook URL secrets, runner and preview session tokens and
+  local passwords are stored as hashes and need no encryption.
 - Multi-factor sign-in.

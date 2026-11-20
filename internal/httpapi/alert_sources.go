@@ -121,8 +121,11 @@ func (h *alertSourcesHandlers) resolve(s domain.AlertSource) (sourcePlan, error)
 	if !ok || w.ProjectID != s.ProjectID {
 		return p, errors.New("webhook not found in the project")
 	}
-	conn, ok := h.repo.Connection(s.ConnectionID)
-	if !ok || conn.ProjectID != s.ProjectID {
+	conn, err := h.repo.Connection(s.ConnectionID)
+	if errors.Is(err, repo.ErrStoredSecretsUnreadable) {
+		return p, err
+	}
+	if err != nil || conn.ProjectID != s.ProjectID {
 		return p, errors.New("connection not found in the project")
 	}
 	def, ok := connector.Default().Connector(conn.ConnectorID)

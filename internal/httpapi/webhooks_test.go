@@ -28,13 +28,13 @@ type webhookFixture struct {
 	runs  []string
 }
 
-func newWebhookFixture(t *testing.T) *webhookFixture {
+func newWebhookFixture(t *testing.T, opts ...repo.Option) *webhookFixture {
 	t.Helper()
 	t.Setenv("AGENTFLOW_SESSION_SECRET", "webhook-test-session-secret")
 	// Production deployments require login; the ingress must still work
 	// without a session because it authenticates with its URL secret.
 	t.Setenv("AGENTFLOW_AUTH_REQUIRED", "true")
-	s, err := repo.OpenTest()
+	s, err := repo.OpenTest(opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
