@@ -1069,6 +1069,56 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/projects/{projectId}/run-limit:
+    parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      tags: [Projects]
+      operationId: getProjectRunLimit
+      description: How many top-level SOP runs the project may hold on platform execution at once. Anyone who can read the project may read it.
+      responses:
+        "200":
+          description: Run limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectRunLimit"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Projects]
+      operationId: setProjectRunLimit
+      description: Sets the project's run limit; platform administrators only, since the slots are shared platform capacity. 0 returns it to the platform default (AGENTFLOW_PROJECT_RUN_LIMIT, or 10). A raised limit starts queued runs on the engine's next pass; a lowered one stops admitting until enough runs finish.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [runLimit]
+              properties:
+                runLimit:
+                  type: integer
+                  minimum: 0
+                  maximum: 200
+      responses:
+        "200":
+          description: Updated run limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectRunLimit"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/projects/{projectId}/restore:
     parameters:
       - name: projectId
@@ -6422,6 +6472,20 @@ components:
         sourceId:
           type: string
           description: The alert source that pulled the alert; empty for a pushed delivery.
+    ProjectRunLimit:
+      type: object
+      properties:
+        projectId:
+          type: string
+        runLimit:
+          type: integer
+          description: The project's own limit; 0 when it uses the platform default.
+        defaultLimit:
+          type: integer
+        effectiveLimit:
+          type: integer
+        maxLimit:
+          type: integer
     AlertSourceInput:
       type: object
       required: [projectId, webhookId, name, connectionId, action]

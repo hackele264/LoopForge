@@ -12,9 +12,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// ProjectRunLimit caps concurrently admitted top-level SOP runs per project on
-// platform (cloud) execution. Personal machines are counted per machine
-// against their optional user-configured Runner.RunLimit instead.
+// ProjectRunLimit is the built-in cap on concurrently admitted top-level SOP
+// runs per project on platform (cloud) execution. The platform default can be
+// changed with AGENTFLOW_PROJECT_RUN_LIMIT and one project's with
+// SetProjectRunLimit. Personal machines are counted per machine against their
+// optional user-configured Runner.RunLimit instead.
 const ProjectRunLimit = 10
 
 // Slot accounting is partitioned into buckets: "project:<id>" for platform
@@ -82,13 +84,14 @@ type runnerAdmissionInfo struct {
 // admissionScope caches per-transaction lookups so legacy rows without
 // persisted quota metadata do not issue one runner/issue query each.
 type admissionScope struct {
-	tx      *gorm.DB
-	runners map[string]runnerAdmissionInfo
-	issues  map[string]string
+	tx       *gorm.DB
+	runners  map[string]runnerAdmissionInfo
+	issues   map[string]string
+	projects map[string]int
 }
 
 func newAdmissionScope(tx *gorm.DB) *admissionScope {
-	return &admissionScope{tx: tx, runners: map[string]runnerAdmissionInfo{}, issues: map[string]string{}}
+	return &admissionScope{tx: tx, runners: map[string]runnerAdmissionInfo{}, issues: map[string]string{}, projects: map[string]int{}}
 }
 
 func (s *admissionScope) runner(id string) (runnerAdmissionInfo, error) {
@@ -146,7 +149,24 @@ func (s *admissionScope) limit(key string) (int, error) {
 		info, err := s.runner(id)
 		return info.limit, err
 	}
-	return ProjectRunLimit, nil
+	id := strings.TrimPrefix(key, "project:")
+	if id == "" {
+		return DefaultProjectRunLimit(), nil
+	}
+	if limit, ok := s.projects[id]; ok {
+		return limit, nil
+	}
+	limit := DefaultProjectRunLimit()
+	var row projectRow
+	if err := s.tx.Select("id", "run_limit").Where("id = ?", id).Take(&row).Error; err == nil {
+		if own := projectRowRunLimit(row); own > 0 {
+			limit = own
+		}
+	} else if err != gorm.ErrRecordNotFound {
+		return 0, err
+	}
+	s.projects[id] = limit
+	return limit, nil
 }
 
 // rowBucketKey reads the persisted bucket, falling back to execution_context,

@@ -444,3 +444,103 @@ func checkConversationWorkspaces(t *testing.T, s *Store, project, prefix string)
 	}
 	return ids
 }
+
+func countAdmitted(t *testing.T, s *Store, project string) (running, queued int) {
+	t.Helper()
+	for _, r := range s.Runs() {
+		if r.ExecutionContext.ProjectID != project {
+			continue
+		}
+		switch r.Status {
+		case "running":
+			running++
+		case "queued":
+			queued++
+		}
+	}
+	return running, queued
+}
+
+// A project's own limit replaces the default for that project only; a
+// raised limit releases the queue on the next promotion pass, and saving
+// project settings never resets it.
+func TestProjectRunLimitIsPerProjectAndSurvivesSettingsSaves(t *testing.T) {
+	s, _ := OpenTest()
+	defer s.Close()
+	for _, id := range []string{"small", "big"} {
+		if err := s.PutProject(domain.Project{ID: id, Key: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetProjectRunLimit("small", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectRunLimit("big", MaxProjectRunLimit+1); err == nil {
+		t.Fatal("limit above the maximum accepted")
+	}
+	if err := s.SetProjectRunLimit("missing", 3); err != ErrProjectNotFound {
+		t.Fatalf("unknown project: %v", err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := s.PutRun(admissionRun(fmt.Sprintf("small-%d", i), "small")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.PutRun(admissionRun(fmt.Sprintf("big-%d", i), "big")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if running, queued := countAdmitted(t, s, "small"); running != 2 || queued != 2 {
+		t.Fatalf("small: running=%d queued=%d", running, queued)
+	}
+	if running, queued := countAdmitted(t, s, "big"); running != 4 || queued != 0 {
+		t.Fatalf("big keeps the default: running=%d queued=%d", running, queued)
+	}
+
+	// Saving the project's settings keeps its limit.
+	p, _ := s.Project("small")
+	p.RunLimit = 0
+	p.Description = "edited"
+	if err := s.PutProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ = s.Project("small"); p.RunLimit != 2 {
+		t.Fatalf("settings save reset the limit to %d", p.RunLimit)
+	}
+
+	if err := s.SetProjectRunLimit("small", 3); err != nil {
+		t.Fatal(err)
+	}
+	if promoted, err := s.PromoteQueuedRuns(); err != nil || len(promoted) != 1 || promoted[0] != "small-2" {
+		t.Fatalf("promoted=%v err=%v", promoted, err)
+	}
+	// Back to the default (10): the rest of the queue goes.
+	if err := s.SetProjectRunLimit("small", 0); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ = s.Project("small"); p.RunLimit != 0 {
+		t.Fatalf("reset limit = %d", p.RunLimit)
+	}
+	if promoted, err := s.PromoteQueuedRuns(); err != nil || len(promoted) != 1 || promoted[0] != "small-3" {
+		t.Fatalf("promoted=%v err=%v", promoted, err)
+	}
+}
+
+func TestDefaultProjectRunLimitFromEnvironment(t *testing.T) {
+	for value, want := range map[string]int{"": ProjectRunLimit, "25": 25, "0": ProjectRunLimit, "999": ProjectRunLimit, "x": ProjectRunLimit} {
+		t.Setenv("AGENTFLOW_PROJECT_RUN_LIMIT", value)
+		if got := DefaultProjectRunLimit(); got != want {
+			t.Fatalf("%q: %d, want %d", value, got, want)
+		}
+	}
+	t.Setenv("AGENTFLOW_PROJECT_RUN_LIMIT", "3")
+	s, _ := OpenTest()
+	defer s.Close()
+	for i := 0; i < 5; i++ {
+		if err := s.PutRun(admissionRun(fmt.Sprintf("env-%d", i), "env")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if running, queued := countAdmitted(t, s, "env"); running != 3 || queued != 2 {
+		t.Fatalf("running=%d queued=%d", running, queued)
+	}
+}

@@ -21,9 +21,13 @@ type Project struct {
 	// expose it as the default combo so old projects keep working.
 	SOPBindings         []IssueSOPBinding `json:"sopBindings,omitempty"`
 	DefaultRepositoryID string            `json:"defaultRepositoryId,omitempty"`
-	OwnerID             int64             `json:"ownerId,omitempty"`
-	Members             []ProjectMember   `json:"members,omitempty"`
-	RunEval             RunEvalPolicy     `json:"runEval,omitempty"`
+	// RunLimit caps the project's concurrently admitted top-level SOP runs on
+	// platform execution; 0 uses the platform default. Only
+	// ProjectsRepo.SetProjectRunLimit writes it.
+	RunLimit int             `json:"runLimit,omitempty"`
+	OwnerID  int64           `json:"ownerId,omitempty"`
+	Members  []ProjectMember `json:"members,omitempty"`
+	RunEval  RunEvalPolicy   `json:"runEval,omitempty"`
 	// Deprecated project-level credential fields are kept only so old payloads
 	// can be decoded and scrubbed by the schema migration.
 	GitToken                     string    `json:"-"`

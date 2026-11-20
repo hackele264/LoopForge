@@ -194,7 +194,7 @@ function projectAdminFormHTML(d,ctx){
   const tapdPanel=(tapdIntegrationAvailable(saved)?paSection('TAPD 需求池','配置后可在需求页从 TAPD 导入需求，澄清结论会回写到 TAPD 单。',`<div class="pa-rows">
       ${paRow('Workspace ID','TAPD 项目 URL 中 /tapd_fe/ 后的数字。',`<input class="pa-input mono" name="tapdWorkspaceId" value="${escapeHTML(d.tapdWorkspaceId||'')}" placeholder="例如 20375341" spellcheck="false">`)}
       ${paRow('Iteration ID','可选，只导入该迭代内的需求。',`<input class="pa-input mono" name="tapdIterationId" value="${escapeHTML(d.tapdIterationId||'')}" placeholder="留空导入全部" spellcheck="false">`)}
-    </div>`):'')+paSection('危险操作','',`<div class="pa-rows">${projectDeleteRow(saved)}${configured?paRow(`清除已保存的 TAPD 配置${configured?' <span class="pa-chip">当前已配置</span>':''}`,'保存项目设置时同时清空 Workspace 与 Iteration，已导入的需求不受影响。',`<label class="pa-switch-wrap"><input type="checkbox" name="tapdClear" role="switch" ${d.tapdClear?'checked':''} aria-label="清除已保存的 TAPD 配置"><span class="pa-switch danger"></span></label>`,{attrs:' data-pa-row-inline'}):''}</div>`);
+    </div>`):'')+(saved?paSection('运行并发','云端执行时本项目最多同时运行多少条 SOP，超出的排队，名额空出后按提交顺序开始。修改后立即生效，无需点「保存项目设置」。',`<div class="pa-rows" data-run-limit-box="${escapeHTML(saved.id)}">${projectRunLimitHTML(state.projectRunLimits?.[saved.id],typeof isPlatformAdmin==='function'&&isPlatformAdmin())}</div>`):'')+paSection('危险操作','',`<div class="pa-rows">${projectDeleteRow(saved)}${configured?paRow(`清除已保存的 TAPD 配置${configured?' <span class="pa-chip">当前已配置</span>':''}`,'保存项目设置时同时清空 Workspace 与 Iteration，已导入的需求不受影响。',`<label class="pa-switch-wrap"><input type="checkbox" name="tapdClear" role="switch" ${d.tapdClear?'checked':''} aria-label="清除已保存的 TAPD 配置"><span class="pa-switch danger"></span></label>`,{attrs:' data-pa-row-inline'}):''}</div>`);
   const panels={basic,repos:paSection('代码仓库','Agent 执行 SOP 时会克隆这些仓库。仓库保存后立即生效，无需点「保存项目设置」。',`<div data-pa-repo-box>${projectRepoListHTML(repos,saved?.defaultRepositoryId||'')}</div>`,repos.length?'<button type="button" class="button ghost small" data-repo-add>＋ 添加仓库</button>':''),members:memberPanel,tapd:tapdPanel};
   const tab=state.projectAdminTab||'basic';
   return PROJECT_ADMIN_TABS.map(t=>`<section class="pa-panel" data-pa-panel="${t.id}" id="paPanel-${t.id}" role="tabpanel" aria-labelledby="paTab-${t.id}"${t.id===tab?'':' hidden'}>${creating&&t.id!=='basic'?'':panels[t.id]}</section>`).join('')
@@ -355,6 +355,7 @@ function renderProjectDetail(opt={}){
     form.innerHTML=projectAdminFormHTML(state.projectDraft,{creating,custom:!!state.projectIdentCustom,repos,saved});
     form.dataset.projectFor=id;form.dataset.mode=mode;
     bindProjectAdminForm(form);bindUserSearches(form);
+    if(!creating){const box=form.querySelector('[data-run-limit-box]');if(box){bindProjectRunLimit(box,id);if(!state.projectRunLimits?.[id])loadProjectRunLimit(id)}}
   }
   syncProjectIdentity();renderProjectAdminHead();
   if(!PROJECT_ADMIN_TABS.some(t=>t.id===state.projectAdminTab)||creating&&state.projectAdminTab!=='basic')state.projectAdminTab='basic';
@@ -484,6 +485,47 @@ function projectAdminAfterSave(projectId,creating){
   if(!creating)return;
   state.projectAdminDetailId=projectId;state.projectAdminTab='repos';
   if(activeViewName()==='projects')history.replaceState(history.state,'',projectAdminHash(projectId,'repos'));
+}
+// Run limit of a project: its own (0 = platform default) and the one in force.
+function projectRunLimitText(view){
+  if(!view)return '读取中…';
+  return view.runLimit>0?`${view.effectiveLimit} 条（本项目设定，平台默认 ${view.defaultLimit} 条）`:`${view.effectiveLimit} 条（平台默认）`;
+}
+// Parses the input: empty or 0 returns to the default.
+function projectRunLimitBody(raw,max){
+  const text=String(raw??'').trim();
+  if(!text)return {runLimit:0};
+  const n=Number(text);
+  if(!Number.isInteger(n)||n<0||n>(max||200))throw new Error(`请输入 0-${max||200} 的整数，0 或留空表示平台默认`);
+  return {runLimit:n};
+}
+function projectRunLimitHTML(view,admin){
+  const now=paRow('当前上限','嵌套的子 SOP 不单独计数；个人执行机器不受此限制。',`<span class="pa-value" data-run-limit-text>${escapeHTML(projectRunLimitText(view))}</span>`);
+  if(!admin)return now+paRow('调整','并发名额是平台共享的执行资源，由平台管理员调整。','<span class="pa-value muted">—</span>');
+  return now+paRow('调整上限',`留空或填 0 使用平台默认。调高后排队中的运行几秒内开始；调低不会中断已在运行的。`,`<span class="pa-inline"><input class="pa-input mono" type="number" min="0" max="${escapeHTML(String(view?.maxLimit||200))}" step="1" data-run-limit-input value="${view&&view.runLimit>0?view.runLimit:''}" placeholder="${escapeHTML(view?`平台默认 ${view.defaultLimit}`:'')}" style="max-width:140px"><button type="button" class="button ghost small" data-run-limit-save>保存上限</button></span>`);
+}
+async function loadProjectRunLimit(projectId){
+  state.projectRunLimits=state.projectRunLimits||{};
+  try{state.projectRunLimits[projectId]=await api(`/api/projects/${encodeURIComponent(projectId)}/run-limit`,{silent:true})}catch{return}
+  renderProjectRunLimitBox(projectId);
+}
+function renderProjectRunLimitBox(projectId){
+  const box=document.querySelector(`[data-run-limit-box="${CSS.escape(projectId)}"]`);if(!box)return;
+  box.innerHTML=projectRunLimitHTML(state.projectRunLimits?.[projectId],typeof isPlatformAdmin==='function'&&isPlatformAdmin());
+  bindProjectRunLimit(box,projectId);
+}
+function bindProjectRunLimit(box,projectId){
+  const input=box.querySelector('[data-run-limit-input]'),btn=box.querySelector('[data-run-limit-save]');
+  if(!input||!btn)return;
+  const save=async()=>{
+    let body;try{body=projectRunLimitBody(input.value,state.projectRunLimits?.[projectId]?.maxLimit)}catch(e){toast(e.message,'warn');return}
+    btn.disabled=true;
+    try{state.projectRunLimits[projectId]=await api(`/api/projects/${encodeURIComponent(projectId)}/run-limit`,{method:'PUT',body:JSON.stringify(body)});toast(`并发上限已设为 ${state.projectRunLimits[projectId].effectiveLimit} 条`);renderProjectRunLimitBox(projectId)}
+    catch(e){toast(e.message,'warn');btn.disabled=false}
+  };
+  btn.onclick=save;
+  // Enter must not submit the surrounding project settings form.
+  input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();save()}};
 }
 function projectDefaultSOPField(project){
   const current=String(project.workflowId||(!project.id?'generic-backend-delivery':'')).trim();
