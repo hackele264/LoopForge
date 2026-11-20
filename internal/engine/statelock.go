@@ -6,34 +6,64 @@ import (
 	"time"
 )
 
-// timedMutex is the engine's global state lock with counters: how often it
-// was taken, how long callers waited for it and how long it was held. Every
-// run state change (read, mutate, store, publish) happens under it, so its
-// hold time bounds how many state changes per second one engine instance can
-// make, whatever the number of runs.
-type timedMutex struct {
+// Run state changes (read, mutate, store, publish) are serialized per run:
+// two changes to the same run never interleave, while different runs change
+// in parallel. Runs share no in-memory state that these sections guard;
+// cross-run work (cancelling children, resuming a parent, admission) goes
+// through its own run's lock or through database transactions.
+//
+// The lock records how often it was taken, how long callers waited and how
+// long it was held, summed over all runs.
+
+type runLock struct {
 	mu       sync.Mutex
 	acquired time.Time // guarded by mu
+	refs     int       // guarded by runLocks.mu
+}
+
+type runLocks struct {
+	mu    sync.Mutex
+	locks map[string]*runLock
 
 	count, waitNs, holdNs, maxWaitNs, maxHoldNs atomic.Int64
 }
 
-func (m *timedMutex) Lock() {
+// lock takes runID's lock and returns its release. Typical use:
+//
+//	defer e.stateLocks.lock(runID)()
+func (l *runLocks) lock(runID string) func() {
 	start := time.Now()
-	m.mu.Lock()
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = map[string]*runLock{}
+	}
+	rl := l.locks[runID]
+	if rl == nil {
+		rl = &runLock{}
+		l.locks[runID] = rl
+	}
+	rl.refs++
+	l.mu.Unlock()
+
+	rl.mu.Lock()
 	now := time.Now()
 	wait := now.Sub(start).Nanoseconds()
-	m.acquired = now
-	m.count.Add(1)
-	m.waitNs.Add(wait)
-	storeMax(&m.maxWaitNs, wait)
-}
-
-func (m *timedMutex) Unlock() {
-	hold := time.Since(m.acquired).Nanoseconds()
-	m.holdNs.Add(hold)
-	storeMax(&m.maxHoldNs, hold)
-	m.mu.Unlock()
+	rl.acquired = now
+	l.count.Add(1)
+	l.waitNs.Add(wait)
+	storeMax(&l.maxWaitNs, wait)
+	return func() {
+		hold := time.Since(rl.acquired).Nanoseconds()
+		l.holdNs.Add(hold)
+		storeMax(&l.maxHoldNs, hold)
+		rl.mu.Unlock()
+		l.mu.Lock()
+		rl.refs--
+		if rl.refs == 0 {
+			delete(l.locks, runID)
+		}
+		l.mu.Unlock()
+	}
 }
 
 func storeMax(v *atomic.Int64, n int64) {
@@ -45,7 +75,9 @@ func storeMax(v *atomic.Int64, n int64) {
 	}
 }
 
-// StateLockStats is a snapshot of the state lock's counters since start.
+// StateLockStats is a snapshot of the run state locks' counters since start,
+// summed over all runs. Hold can exceed wall time because runs hold their
+// locks in parallel.
 type StateLockStats struct {
 	Acquisitions int64
 	Wait, Hold   time.Duration
@@ -53,14 +85,14 @@ type StateLockStats struct {
 	MaxHold      time.Duration
 }
 
-// StateLockStats reports the global state lock's counters.
+// StateLockStats reports the run state locks' counters.
 func (e *Engine) StateLockStats() StateLockStats {
-	m := &e.stateMu
+	l := &e.stateLocks
 	return StateLockStats{
-		Acquisitions: m.count.Load(),
-		Wait:         time.Duration(m.waitNs.Load()),
-		Hold:         time.Duration(m.holdNs.Load()),
-		MaxWait:      time.Duration(m.maxWaitNs.Load()),
-		MaxHold:      time.Duration(m.maxHoldNs.Load()),
+		Acquisitions: l.count.Load(),
+		Wait:         time.Duration(l.waitNs.Load()),
+		Hold:         time.Duration(l.holdNs.Load()),
+		MaxWait:      time.Duration(l.maxWaitNs.Load()),
+		MaxHold:      time.Duration(l.maxHoldNs.Load()),
 	}
 }

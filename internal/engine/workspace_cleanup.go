@@ -445,8 +445,8 @@ func (e *Engine) discardIdleRunContainers(ctx context.Context, now time.Time) in
 	return len(discarded)
 }
 
-// discardIdleRunContainer re-reads the run under stateMu, the lock Retry and
-// Approve take before they flip a run back to running.
+// discardIdleRunContainer re-reads the run under its state lock, the lock
+// Retry and Approve take before they flip a run back to running.
 // discardLocalSandbox removes this host's sandbox container after the run
 // moves to a pool runner. The workspace stays for inspection.
 func (e *Engine) discardLocalSandbox(runID string) {
@@ -459,8 +459,7 @@ func (e *Engine) discardLocalSandbox(runID string) {
 }
 
 func (e *Engine) discardIdleRunContainer(ctx context.Context, runID string, now time.Time) bool {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(runID)()
 	run, ok := e.repo.RunState(runID)
 	// Keep preview's local-container reclamation for runs moved to a runner,
 	// while preserving active workspace operations and the new idle deadline.
@@ -505,7 +504,8 @@ func runContainerIdle(run domain.Run, now time.Time) bool {
 }
 
 // settleOrphan marks an unowned run and its in-flight nodes as failed.
-// updateRun already serialises on stateMu and publishes the new snapshot.
+// updateRun already serialises on the run's state lock and publishes the new
+// snapshot.
 func (e *Engine) settleOrphan(runID, reason string) {
 	e.stopRunScheduler(runID)
 	status := orphanSettleStatus(reason)

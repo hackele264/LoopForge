@@ -32,8 +32,7 @@ func (e *Engine) updateRunAt(id string, allowExpiredLease bool, mutate func(*dom
 // rejected the write, that error. A skipped update (missing run or a lease
 // held elsewhere) is not an error.
 func (e *Engine) updateRunAtErr(id string, allowExpiredLease bool, mutate func(*domain.Run)) (bool, error) {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
+	defer e.stateLocks.lock(id)()
 	r, ok := e.repo.RunState(id)
 	if !ok {
 		_ = e.takePendingObservations(id)
