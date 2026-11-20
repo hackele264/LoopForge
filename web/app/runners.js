@@ -32,12 +32,12 @@ async function ensureRunnerBindCode(silent){
 function runnerConcurrencyLabel(runner){
   if(!(Number(runner?.ownerUserId)>0))return '项目共享执行机器';
   const limit=Number(runner?.runLimit)||0;
-  return limit>0?`个人机器 · 最多同时运行 ${limit} 条 SOP（不受项目 10 条限额）`:'个人机器 · 不限同时运行数（不受项目 10 条限额）';
+  return limit>0?`个人机器 · 最多同时运行 ${limit} 条 SOP（不受项目并发限额）`:'个人机器 · 不限同时运行数（不受项目并发限额）';
 }
 function runnerRunLimitHTML(runner){
   if(!(Number(runner?.ownerUserId)>0))return '';
   const limit=Number(runner?.runLimit)||0;
-  const tip='按顶层 SOP 计数，超出排队；失败、暂停、待确认也占用名额。留空表示不限，不受项目 10 条限额约束。';
+  const tip='按顶层 SOP 计数，超出排队；失败、暂停、待确认也占用名额。留空表示不限，不受项目并发限额约束。';
   return `<div class="runner-run-limit"><label for="runLimit-${escapeHTML(runner.id)}">最多同时运行<input id="runLimit-${escapeHTML(runner.id)}" type="number" inputmode="numeric" min="1" max="100" step="1" placeholder="不限" value="${limit>0?limit:''}" data-runner-run-limit="${escapeHTML(runner.id)}" aria-label="${escapeHTML(runner.name||runner.id)} 最多同时运行条数">条</label><span class="runner-tip" tabindex="0" role="note" aria-label="${tip}" data-tip="${tip}">?</span></div>`;
 }
 async function saveRunnerRunLimit(runnerId,raw){

@@ -4,6 +4,7 @@ import (
 	"agentflow/internal/domain"
 	"agentflow/internal/repo"
 	"errors"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"log"
@@ -357,4 +358,69 @@ func (h *projectsHandlers) businessDomainAssignment(c *gin.Context) {
 		return
 	}
 	c.JSON(200, domain.PublicProject(p))
+}
+
+// projectRunLimitView is a project's admission cap: its own (0 when it uses
+// the default), the platform default, and the one in force.
+type projectRunLimitView struct {
+	ProjectID string `json:"projectId"`
+	RunLimit  int    `json:"runLimit"`
+	Default   int    `json:"defaultLimit"`
+	Effective int    `json:"effectiveLimit"`
+	Max       int    `json:"maxLimit"`
+}
+
+func projectRunLimitOf(p domain.Project) projectRunLimitView {
+	v := projectRunLimitView{ProjectID: p.ID, RunLimit: p.RunLimit, Default: repo.DefaultProjectRunLimit(), Max: repo.MaxProjectRunLimit}
+	v.Effective = v.Default
+	if p.RunLimit > 0 {
+		v.Effective = p.RunLimit
+	}
+	return v
+}
+
+// runLimit answers GET and PUT /api/projects/{id}/run-limit: how many
+// top-level SOP runs the project may hold on platform execution at once.
+// Anyone who can read the project sees it; the slots are shared platform
+// capacity, so only platform administrators change it.
+func (h *projectsHandlers) runLimit(c *gin.Context) {
+	p, ok := h.repo.Project(c.Param("id"))
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "项目不存在"})
+		return
+	}
+	noteAuditProject(c, p.ID)
+	if c.Request.Method == http.MethodGet {
+		if !h.projectReadable(c.Request, p.ID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无权查看该项目"})
+			return
+		}
+		c.JSON(http.StatusOK, projectRunLimitOf(p))
+		return
+	}
+	if authRequired() && !h.isPlatformAdmin(c.Request) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "只有平台管理员可以调整项目的并发上限"})
+		return
+	}
+	var body struct {
+		RunLimit *int `json:"runLimit"`
+	}
+	if !decode(c, &body) {
+		return
+	}
+	if body.RunLimit == nil || *body.RunLimit < 0 || *body.RunLimit > repo.MaxProjectRunLimit {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("runLimit 需为 0-%d 的整数，0 表示使用平台默认", repo.MaxProjectRunLimit)})
+		return
+	}
+	if err := h.repo.SetProjectRunLimit(p.ID, *body.RunLimit); err != nil {
+		if err == repo.ErrProjectNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "项目不存在"})
+			return
+		}
+		respond(c, err)
+		return
+	}
+	// A raised limit admits queued runs on the engine's next pass.
+	p, _ = h.repo.Project(p.ID)
+	c.JSON(http.StatusOK, projectRunLimitOf(p))
 }

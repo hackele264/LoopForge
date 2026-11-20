@@ -1559,7 +1559,7 @@ function runExecutionChipHTML(r){
   const mine=(state.runners||[]).find(m=>m.id===id);
   const personal=r.concurrencyExempt===true||Number(mine?.ownerUserId)>0;
   const machineLimit=Number(mine?.runLimit)||0;
-  const label=personal?`个人机器 ${mine?.name||id.slice(-8)} · 不受项目 10 条 SOP 限额${machineLimit>0?`，本机最多 ${machineLimit} 条`:''}`:ec.executionPool==='cloud'?(id?'云端执行池':'等待云端执行机器'):`执行机器 ${mine?.name||id.slice(-8)}`;
+  const label=personal?`个人机器 ${mine?.name||id.slice(-8)} · 不受项目 SOP 并发限额${machineLimit>0?`，本机最多 ${machineLimit} 条`:''}`:ec.executionPool==='cloud'?(id?'云端执行池':'等待云端执行机器'):`执行机器 ${mine?.name||id.slice(-8)}`;
   return `<span class="run-meta-chip" title="${escapeHTML(id||'尚未分配')}">${escapeHTML(label)}</span>`;
 }
 async function deleteRun(id){

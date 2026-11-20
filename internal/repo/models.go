@@ -95,14 +95,16 @@ type apiTokenRow struct {
 func (apiTokenRow) TableName() string { return "api_tokens" }
 
 type projectRow struct {
-	BusinessDomainID string     `gorm:"column:business_domain_id;size:64;not null;default:'';index:idx_projects_business_domain"`
-	ID               string     `gorm:"column:id;primaryKey;size:64"`
-	ProjectKey       string     `gorm:"column:project_key;index:idx_projects_key;size:64"`
-	Name             string     `gorm:"column:name;size:255"`
-	OwnerUserID      *int64     `gorm:"column:owner_user_id;index:idx_projects_owner"`
-	Payload          []byte     `gorm:"column:payload;type:json"`
-	Created          *time.Time `gorm:"column:created_at"`
-	Updated          *time.Time `gorm:"column:updated_at"`
+	BusinessDomainID string `gorm:"column:business_domain_id;size:64;not null;default:'';index:idx_projects_business_domain"`
+	ID               string `gorm:"column:id;primaryKey;size:64"`
+	ProjectKey       string `gorm:"column:project_key;index:idx_projects_key;size:64"`
+	Name             string `gorm:"column:name;size:255"`
+	OwnerUserID      *int64 `gorm:"column:owner_user_id;index:idx_projects_owner"`
+	// RunLimit is the project's admission cap; NULL uses the platform default.
+	RunLimit *int       `gorm:"column:run_limit"`
+	Payload  []byte     `gorm:"column:payload;type:json"`
+	Created  *time.Time `gorm:"column:created_at"`
+	Updated  *time.Time `gorm:"column:updated_at"`
 }
 
 func (projectRow) TableName() string { return "projects" }

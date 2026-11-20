@@ -96,7 +96,7 @@ async function main() {
   const machine=load({state:{runners:[{id:'m',name:'local',ownerUserId:9}]},escapeHTML:String},['runnerConcurrencyLabel','runExecutionChipHTML']);
   assert.match(machine.runnerConcurrencyLabel({ownerUserId:9}),/个人机器/);
   assert.doesNotMatch(machine.runnerConcurrencyLabel({ownerUserId:0,labels:{personal:'true'}}),/不受/);
-  assert.match(machine.runExecutionChipHTML({executionContext:{executionMode:'runner',executionRunnerId:'m'}}),/不受项目 10/);
+  assert.match(machine.runExecutionChipHTML({executionContext:{executionMode:'runner',executionRunnerId:'m'}}),/不受项目 SOP 并发限额/);
   assert.match(machine.runExecutionChipHTML({concurrencyExempt:true,executionContext:{executionMode:'runner',executionRunnerId:'unlisted'}}),/个人机器/);
   assert.match(machine.runnerConcurrencyLabel({ownerUserId:9}),/不限同时运行数/);
   assert.match(machine.runnerConcurrencyLabel({ownerUserId:9,runLimit:3}),/最多同时运行 3 条/);
@@ -107,7 +107,7 @@ async function main() {
   assert.equal(limitUI.runnerRunLimitHTML({id:'cloud',ownerUserId:0}),'','platform machines have no per-machine limit');
   const unlimited=limitUI.runnerRunLimitHTML({id:'m',name:'mac',ownerUserId:9});
   assert.match(unlimited,/placeholder="不限" value=""/);
-  assert.match(unlimited,/class="runner-tip" tabindex="0"[^>]*data-tip="[^"]*不受项目 10 条限额/,'run limit rules stay in a focusable tip');
+  assert.match(unlimited,/class="runner-tip" tabindex="0"[^>]*data-tip="[^"]*不受项目并发限额/,'run limit rules stay in a focusable tip');
   assert.match(limitUI.runnerRunLimitHTML({id:'m',ownerUserId:9,runLimit:5}),/value="5"/);
   assert.doesNotMatch(limitUI.runnerRunLimitHTML({id:'"><img src=x onerror=alert(1)>',ownerUserId:9}),/<img/,'runner id is escaped');
 

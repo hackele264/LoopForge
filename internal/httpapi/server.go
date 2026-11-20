@@ -372,6 +372,8 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.PUT("/api/business-domains", api.businessDomains.domains)
 	g.GET("/api/business-domain-report", api.businessDomains.report)
 	g.PUT("/api/projects/:id/business-domain", api.projects.businessDomainAssignment)
+	g.GET("/api/projects/:id/run-limit", api.projects.runLimit)
+	g.PUT("/api/projects/:id/run-limit", api.projects.runLimit)
 	g.GET("/api/projects/:id/business-domain/history", api.projects.businessDomainAssignment)
 	g.GET("/api/projects", api.projects.projects)
 	g.PUT("/api/projects", api.projects.projects)

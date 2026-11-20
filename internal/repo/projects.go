@@ -1,7 +1,11 @@
 package repo
 
 import (
+	"errors"
+	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +48,7 @@ func (r *ProjectsRepo) Projects() []domain.Project {
 			project.OwnerID = 0
 		}
 		project.BusinessDomainID = row.BusinessDomainID
+		project.RunLimit = projectRowRunLimit(row)
 		if row.Updated != nil {
 			project.UpdatedAt = *row.Updated
 		}
@@ -72,6 +77,7 @@ func (r *ProjectsRepo) Project(id string) (domain.Project, bool) {
 		project.OwnerID = 0
 	}
 	project.BusinessDomainID = row.BusinessDomainID
+	project.RunLimit = projectRowRunLimit(row)
 	if row.Updated != nil {
 		project.UpdatedAt = *row.Updated
 	}
@@ -181,6 +187,8 @@ func (r *ProjectsRepo) writeProject(v domain.Project) error {
 		// Only SetProjectBusinessDomain owns the assignment, even for stale project payloads.
 		v.BusinessDomainID = current.BusinessDomainID
 		payload.BusinessDomainID = current.BusinessDomainID
+		// Likewise only SetProjectRunLimit owns the run limit column.
+		v.RunLimit, payload.RunLimit = projectRowRunLimit(current), 0
 		if err := upsert(tx, "projects", map[string]any{
 			"id": v.ID, "business_domain_id": v.BusinessDomainID, "project_key": v.Key, "name": v.Name, "owner_user_id": owner,
 			"payload": mustJSON(payload), "created_at": timePtr(v.CreatedAt), "updated_at": timePtr(v.UpdatedAt),
@@ -225,4 +233,54 @@ func (r *ProjectsRepo) writeProject(v domain.Project) error {
 		}
 		return nil
 	})
+}
+
+// ErrProjectNotFound is returned for an unknown project.
+var ErrProjectNotFound = errors.New("project not found")
+
+// MaxProjectRunLimit bounds a project's configurable run limit.
+const MaxProjectRunLimit = 200
+
+// DefaultProjectRunLimit is the platform default for projects without their
+// own limit: AGENTFLOW_PROJECT_RUN_LIMIT when set to 1..MaxProjectRunLimit,
+// otherwise ProjectRunLimit.
+func DefaultProjectRunLimit() int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("AGENTFLOW_PROJECT_RUN_LIMIT"))); err == nil && v > 0 && v <= MaxProjectRunLimit {
+		return v
+	}
+	return ProjectRunLimit
+}
+
+func projectRowRunLimit(row projectRow) int {
+	if row.RunLimit != nil && *row.RunLimit > 0 {
+		return *row.RunLimit
+	}
+	return 0
+}
+
+// SetProjectRunLimit is the only writer of run_limit; 0 returns the project
+// to the platform default. It takes the project's admission bucket so a
+// change cannot interleave with an admission decision for the project. A
+// raised limit releases queued runs on the next promotion pass.
+func (r *ProjectsRepo) SetProjectRunLimit(id string, limit int) error {
+	if limit < 0 || limit > MaxProjectRunLimit {
+		return fmt.Errorf("项目最多同时运行条数需在 0-%d 之间（0 表示使用平台默认）", MaxProjectRunLimit)
+	}
+	var value any
+	if limit > 0 {
+		value = limit
+	}
+	return r.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAdmissionGate(r.deps, tx, admissionBucketKey(id, "", false)); err != nil {
+			return err
+		}
+		res := tx.Model(&projectRow{}).Where("id = ?", id).Updates(map[string]any{"run_limit": value, "updated_at": time.Now().UTC()})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrProjectNotFound
+		}
+		return nil
+	}, r.admissionTxOptions()...)
 }

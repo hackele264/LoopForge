@@ -143,6 +143,15 @@ A platform administrator can share one CodeBuddy API Key under **Platform admini
 
 Configure provider credentials in the platform UI, not the host's global CLI configuration. Credentials are bound to the responsible actor by the upstream runtime. The home composer and SOP roles each choose a built-in CLI independently. Select the executor beside the home model selector; its API key (and optional Codex/Claude base URL) comes from your personal settings. Changing the executor preserves the draft; saved conversations record the executor used. Main Bot writes still pass through the platform tool gateway and its approval checks. Requirement clarification and notifications continue to use CodeBuddy. A scheduled assistant task can select any supported CLI and runs as an ordinary chat turn; Codex and Claude Code still need that account's own credential. Live model tests are opt-in; set `AGENTFLOW_LIVE_TESTS=1` only for the acceptance suites that need to load local credentials.
 
+### Concurrent SOP runs per project
+
+On platform execution each project holds at most 10 top-level SOP runs at once; further runs wait as 排队中 and start in submission order as slots free up. Failed, paused, waiting and started-then-cancelled runs keep their slot; only succeeded runs and runs cancelled while queued free it. Nested SOPs share their parent's slot, and personal execution machines are counted per machine against their own limit instead.
+
+- `AGENTFLOW_PROJECT_RUN_LIMIT` (1-200) changes the platform default for every project.
+- A platform administrator can give one project its own limit under 项目配置 → 高级设置 → 运行并发, or with `PUT /api/projects/{id}/run-limit` (`{"runLimit": 30}`; `0` returns it to the default). A raised limit starts queued runs within seconds; a lowered one stops admitting until enough runs finish and never interrupts running ones. Project members see the limit in force but cannot change it, since the slots are shared platform capacity.
+
+The per-project limit lives in `projects.run_limit`, which gorm's AutoMigrate adds on start; `migrations/045_project_run_limit.sql` is the manual equivalent.
+
 ## Observability schema
 
 After the base tables have been created, run `bash scripts/install-schema-extensions.sh` for the Compose database. It installs absent `run_telemetry.adapter` and `run_logs.level` columns and their indexes from upstream migration `001_run_obs_generated_columns.sql`, then replays the `INSERT IGNORE` starter catalog. Both steps can be repeated without touching existing rows. The installer runs it before printing the address, and `./start.sh pull` runs it again after recreating containers, so an older data volume upgraded to a newer image picks up the columns the new code reads. Application startup does not run data migrations.
