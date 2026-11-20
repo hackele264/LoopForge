@@ -96,8 +96,19 @@ func takeRun(db *gorm.DB, id string) (runRow, bool) {
 // ---------- Reads ----------
 
 func (r *RunsRepo) Runs() []domain.Run {
+	return r.loadRuns(r.DB)
+}
+
+// LiveRuns returns only running and waiting runs, the ones the claim loop
+// can act on. Listing every run instead costs two queries per run in the
+// table, which grows without bound and once made each pass take seconds.
+func (r *RunsRepo) LiveRuns() []domain.Run {
+	return r.loadRuns(r.DB.Where("status IN ?", []string{"running", "waiting"}))
+}
+
+func (r *RunsRepo) loadRuns(q *gorm.DB) []domain.Run {
 	var rows []runRow
-	if err := r.DB.Find(&rows).Error; err != nil {
+	if err := q.Find(&rows).Error; err != nil {
 		return []domain.Run{}
 	}
 	out := make([]domain.Run, 0, len(rows))
