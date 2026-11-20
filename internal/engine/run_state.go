@@ -145,6 +145,11 @@ func (e *Engine) StartClaimLoop(ctx context.Context) {
 				if resumed := e.ResumeInterruptedRuns(); len(resumed) > 0 {
 					log.Printf("claimed %d run(s): %v", len(resumed), resumed)
 				}
+			case <-e.admitKick:
+				if !e.executes() {
+					return
+				}
+				e.admitQueued()
 			}
 		}
 	}()
