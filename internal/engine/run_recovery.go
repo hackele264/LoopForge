@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -108,16 +109,10 @@ func (e *Engine) ResumeInterruptedRuns() []string {
 	if !e.executes() {
 		return nil
 	}
-	var resumed []string
 	// Promotion is per bucket; a failing bucket still returns the others and
-	// must not stop interrupted-run recovery below.
-	promoted, err := e.repo.PromoteQueuedRuns()
-	if err != nil {
-		log.Printf("promote queued runs: %v", err)
-	}
-	for _, id := range promoted {
-		e.publish(id)
-	}
+	// must not stop interrupted-run recovery below. Admitted runs start here
+	// in parallel; the scan below then finds them owned and skips them.
+	resumed := e.admitQueued()
 	for _, listed := range e.repo.LiveRuns() {
 		if listed.IsWorkspace() || listed.HistoricalGroup() {
 			continue
@@ -265,10 +260,39 @@ func (e *Engine) admitQueued() []string {
 	if err != nil {
 		log.Printf("promote queued runs: %v", err)
 	}
-	var started []string
 	for _, id := range promoted {
 		e.publish(id)
-		if e.takeOverRun(id) {
+	}
+	return e.takeOverRuns(promoted)
+}
+
+// admitParallel bounds how many admitted runs are taken over at once. Each
+// takeover is a few database round trips; done one by one, a raised project
+// limit that admits a hundred runs at once left the last of them waiting
+// seconds before they started.
+const admitParallel = 16
+
+// takeOverRuns takes over the given runs concurrently and returns the ones
+// that started here, in the order given.
+func (e *Engine) takeOverRuns(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	ok := make([]bool, len(ids))
+	slots := make(chan struct{}, admitParallel)
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func(i int, id string) {
+			defer func() { <-slots; wg.Done() }()
+			ok[i] = e.takeOverRun(id)
+		}(i, id)
+	}
+	wg.Wait()
+	var started []string
+	for i, id := range ids {
+		if ok[i] {
 			started = append(started, id)
 		}
 	}
